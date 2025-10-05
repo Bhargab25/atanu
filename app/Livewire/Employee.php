@@ -4,6 +4,7 @@ namespace App\Livewire;
 
 use Livewire\Component;
 use App\Models\Employee as EmployeeModel;
+use App\Models\CompanyProfile;
 use Livewire\WithPagination;
 use Livewire\WithFileUploads;
 use Mary\Traits\Toast;
@@ -18,6 +19,7 @@ class Employee extends Component
     public $showDrawer = false;
 
     // Form fields
+    public $company_profile_id;
     public $name;
     public $email;
     public $phone;
@@ -43,6 +45,8 @@ class Employee extends Component
     public $appliedStatusFilter = [];
     public $departmentFilter = [];
     public $appliedDepartmentFilter = [];
+    public $companyFilter = [];
+    public $appliedCompanyFilter = [];
 
     public $sortBy = ['column' => 'name', 'direction' => 'asc'];
     public $perPage = 10;
@@ -59,21 +63,33 @@ class Employee extends Component
     ];
 
     public $departmentOptions = [];
+    public $companyOptions = [];
 
     protected $listeners = ['refreshEmployees' => '$refresh'];
 
     public function mount()
     {
         $this->joining_date = now()->format('Y-m-d');
-        $this->loadDepartmentOptions();
+        $this->loadFilterOptions();
+
+        // Set default company if only one exists
+        $companies = CompanyProfile::active()->get();
+        if ($companies->count() === 1) {
+            $this->company_profile_id = $companies->first()->id;
+        }
     }
 
-    private function loadDepartmentOptions()
+    private function loadFilterOptions()
     {
         $this->departmentOptions = EmployeeModel::whereNotNull('department')
             ->distinct()
             ->pluck('department')
             ->map(fn($dept) => ['id' => $dept, 'name' => $dept])
+            ->toArray();
+
+        $this->companyOptions = CompanyProfile::active()
+            ->get()
+            ->map(fn($company) => ['id' => $company->id, 'name' => $company->name])
             ->toArray();
     }
 
@@ -96,7 +112,14 @@ class Employee extends Component
 
     public function resetFilters()
     {
-        $this->reset(['statusFilter', 'appliedStatusFilter', 'departmentFilter', 'appliedDepartmentFilter']);
+        $this->reset([
+            'statusFilter',
+            'appliedStatusFilter',
+            'departmentFilter',
+            'appliedDepartmentFilter',
+            'companyFilter',
+            'appliedCompanyFilter'
+        ]);
         $this->resetPage();
     }
 
@@ -104,6 +127,7 @@ class Employee extends Component
     {
         $this->appliedStatusFilter = $this->statusFilter;
         $this->appliedDepartmentFilter = $this->departmentFilter;
+        $this->appliedCompanyFilter = $this->companyFilter;
         $this->showDrawer = false;
         $this->resetPage();
         $this->success('Filters Applied!', 'Employees filtered successfully.');
@@ -118,9 +142,10 @@ class Employee extends Component
 
     public function editEmployee($id)
     {
-        $employee = EmployeeModel::find($id);
+        $employee = EmployeeModel::with('company')->find($id);
         if ($employee) {
             $this->employeeId = $employee->id;
+            $this->company_profile_id = $employee->company_profile_id;
             $this->name = $employee->name;
             $this->email = $employee->email;
             $this->phone = $employee->phone;
@@ -143,6 +168,7 @@ class Employee extends Component
     public function saveEmployee()
     {
         $rules = [
+            'company_profile_id' => 'required|exists:company_profiles,id',
             'name' => 'required|string|max:255',
             'email' => 'nullable|email|unique:employees,email,' . $this->employeeId,
             'phone' => 'required|string|max:20',
@@ -170,6 +196,7 @@ class Employee extends Component
         $this->validate($rules);
 
         $data = [
+            'company_profile_id' => $this->company_profile_id,
             'name' => $this->name,
             'email' => $this->email,
             'phone' => $this->phone,
@@ -209,7 +236,7 @@ class Employee extends Component
             $this->success('Employee Updated!', 'The employee has been updated successfully.');
         } else {
             // Generate employee ID
-            $data['employee_id'] = EmployeeModel::generateEmployeeId();
+            $data['employee_id'] = EmployeeModel::generateEmployeeId($this->company_profile_id);
 
             // Handle file uploads
             if ($this->photo) {
@@ -225,7 +252,7 @@ class Employee extends Component
 
         $this->resetForm();
         $this->myModal = false;
-        $this->loadDepartmentOptions();
+        $this->loadFilterOptions();
         $this->dispatch('refreshEmployees');
     }
 
@@ -279,6 +306,7 @@ class Employee extends Component
     {
         $this->reset([
             'employeeId',
+            'company_profile_id',
             'name',
             'email',
             'phone',
@@ -296,6 +324,12 @@ class Employee extends Component
         ]);
         $this->joining_date = now()->format('Y-m-d');
         $this->is_active = true;
+
+        // Set default company if only one exists
+        $companies = CompanyProfile::active()->get();
+        if ($companies->count() === 1) {
+            $this->company_profile_id = $companies->first()->id;
+        }
     }
 
     public function cancel()
@@ -312,7 +346,7 @@ class Employee extends Component
 
     public function render()
     {
-        $employees = EmployeeModel::query()
+        $employees = EmployeeModel::with('company')
             ->when($this->search, function ($query) {
                 return $query->where(function ($subQuery) {
                     $subQuery->where('name', 'like', '%' . $this->search . '%')
@@ -320,7 +354,10 @@ class Employee extends Component
                         ->orWhere('email', 'like', '%' . $this->search . '%')
                         ->orWhere('phone', 'like', '%' . $this->search . '%')
                         ->orWhere('position', 'like', '%' . $this->search . '%')
-                        ->orWhere('department', 'like', '%' . $this->search . '%');
+                        ->orWhere('department', 'like', '%' . $this->search . '%')
+                        ->orWhereHas('company', function ($companyQuery) {
+                            $companyQuery->where('name', 'like', '%' . $this->search . '%');
+                        });
                 });
             })
             ->when(!empty($this->appliedStatusFilter), function ($query) {
@@ -335,6 +372,9 @@ class Employee extends Component
             ->when(!empty($this->appliedDepartmentFilter), function ($query) {
                 return $query->whereIn('department', $this->appliedDepartmentFilter);
             })
+            ->when(!empty($this->appliedCompanyFilter), function ($query) {
+                return $query->whereIn('company_profile_id', $this->appliedCompanyFilter);
+            })
             ->orderBy($this->sortBy['column'], $this->sortBy['direction'])
             ->paginate($this->perPage);
 
@@ -342,6 +382,7 @@ class Employee extends Component
             ['label' => 'Photo', 'key' => 'photo', 'sortable' => false],
             ['label' => 'Employee ID', 'key' => 'employee_id', 'sortable' => true],
             ['label' => 'Name', 'key' => 'name', 'sortable' => true],
+            ['label' => 'Company', 'key' => 'company', 'sortable' => false],
             ['label' => 'Contact', 'key' => 'phone', 'sortable' => false],
             ['label' => 'Position', 'key' => 'position', 'sortable' => true],
             ['label' => 'Department', 'key' => 'department', 'sortable' => true],

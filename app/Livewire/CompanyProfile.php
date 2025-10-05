@@ -17,8 +17,12 @@ class CompanyProfile extends Component
     // Tab management
     public $activeTab = 'basic';
 
-    // Company Profile
-    public $companyProfile;
+    // Company Management
+    public $companies = [];
+    public $selectedCompanyId = null;
+    public $companyProfile = null;
+    public $showCompanySelector = true;
+    public $showCreateForm = false;
 
     // Basic Information
     public $name = '';
@@ -131,13 +135,150 @@ class CompanyProfile extends Component
 
     public function mount()
     {
-        $this->companyProfile = CompanyProfileModel::current();
+        $this->loadCompanies();
+        $this->loadDefaultCompany();
+    }
+
+    public function loadCompanies()
+    {
+        $this->companies = CompanyProfileModel::getAll();
+    }
+
+    public function loadDefaultCompany()
+    {
+        $defaultCompany = CompanyProfileModel::current();
+        if ($defaultCompany) {
+            $this->selectedCompanyId = $defaultCompany->id;
+            $this->switchToCompany($defaultCompany->id);
+        }
+    }
+
+    public function switchToCompany($companyId)
+    {
+        $this->selectedCompanyId = $companyId;
+        $this->companyProfile = CompanyProfileModel::find($companyId);
+        $this->showCompanySelector = false;
+        $this->showCreateForm = false;
         $this->loadCompanyData();
+        $this->activeTab = 'basic';
+    }
+
+    public function showCompanyList()
+    {
+        $this->showCompanySelector = true;
+        $this->showCreateForm = false;
+        $this->loadCompanies();
+    }
+
+    public function createNewCompany()
+    {
+        $this->resetForm();
+        $this->companyProfile = null;
+        $this->selectedCompanyId = null;
+        $this->showCreateForm = true;
+        $this->showCompanySelector = false;
+        $this->activeTab = 'basic';
+    }
+
+    public function setAsDefault($companyId)
+    {
+        CompanyProfileModel::setDefault($companyId);
+        $this->loadCompanies();
+        $this->success('Default Company Set!', 'Company has been set as default successfully.');
+    }
+
+    public function deleteCompany($companyId)
+    {
+        $company = CompanyProfileModel::find($companyId);
+        if ($company) {
+            // Don't allow deletion if it's the only company
+            if (CompanyProfileModel::active()->count() <= 1) {
+                $this->error('Cannot Delete!', 'Cannot delete the only company. At least one company must exist.');
+                return;
+            }
+
+            // Don't allow deletion of default company
+            if ($company->is_default) {
+                $this->error('Cannot Delete!', 'Cannot delete the default company. Please set another company as default first.');
+                return;
+            }
+
+            // Delete associated files
+            $this->deleteCompanyFiles($company);
+            
+            $company->delete();
+            $this->loadCompanies();
+            
+            // If current company was deleted, switch to default
+            if ($this->selectedCompanyId == $companyId) {
+                $this->loadDefaultCompany();
+            }
+            
+            $this->success('Company Deleted!', 'Company has been deleted successfully.');
+        }
+    }
+
+    private function deleteCompanyFiles($company)
+    {
+        $filePaths = [
+            $company->logo_path,
+            $company->favicon_path,
+            $company->letterhead_path,
+            $company->signature_path
+        ];
+
+        foreach ($filePaths as $path) {
+            if ($path && Storage::exists($path)) {
+                Storage::delete($path);
+            }
+        }
     }
 
     public function switchTab($tab)
     {
         $this->activeTab = $tab;
+    }
+
+    private function resetForm()
+    {
+        // Reset all form fields to default values
+        $this->name = '';
+        $this->legalName = '';
+        $this->email = '';
+        $this->phone = '';
+        $this->mobile = '';
+        $this->website = '';
+        $this->address = '';
+        $this->city = '';
+        $this->state = '';
+        $this->country = 'India';
+        $this->postalCode = '';
+        $this->panNumber = '';
+        $this->gstin = '';
+        $this->cin = '';
+        $this->tanNumber = '';
+        $this->fssaiNumber = '';
+        $this->msmeNumber = '';
+        $this->bankName = '';
+        $this->bankAccountNumber = '';
+        $this->bankIfscCode = '';
+        $this->bankBranch = '';
+        $this->establishedDate = '';
+        $this->businessType = '';
+        $this->businessDescription = '';
+        $this->industry = '';
+        $this->employeeCount = '';
+        $this->facebookUrl = '';
+        $this->twitterUrl = '';
+        $this->linkedinUrl = '';
+        $this->instagramUrl = '';
+        $this->financialYearStart = '04-01';
+        $this->currency = 'INR';
+        $this->timezone = 'Asia/Kolkata';
+        $this->currentLogoPath = '';
+        $this->currentFaviconPath = '';
+        $this->currentLetterheadPath = '';
+        $this->currentSignaturePath = '';
     }
 
     private function loadCompanyData()
@@ -427,13 +568,26 @@ class CompanyProfile extends Component
             if ($this->companyProfile && $this->companyProfile->exists) {
                 $this->companyProfile->update($data);
             } else {
-                $this->companyProfile = CompanyProfileModel::create(array_merge($data, ['is_active' => true]));
+                // Creating new company
+                $companyData = array_merge($data, [
+                    'is_active' => true,
+                    'is_default' => CompanyProfileModel::active()->count() == 0, // First company is default
+                    'created_by' => auth()->id(),
+                ]);
+                
+                $this->companyProfile = CompanyProfileModel::create($companyData);
+                $this->selectedCompanyId = $this->companyProfile->id;
+                $this->showCreateForm = false;
+                $this->loadCompanies();
             }
         } catch (\Exception $e) {
             Log::error('Error saving company profile: ' . $e->getMessage());
             throw $e;
         }
     }
+
+    // Keep all your existing methods for file uploads, etc...
+    // (saveBasicInfo, saveAddressInfo, saveTaxInfo, etc. remain the same)
 
     public function render()
     {

@@ -6,9 +6,6 @@ use Illuminate\Support\Facades\Schema;
 
 return new class extends Migration
 {
-    /**
-     * Run the migrations.
-     */
     public function up(): void
     {
         Schema::create('company_profiles', function (Blueprint $table) {
@@ -17,7 +14,7 @@ return new class extends Migration
             $table->string('legal_name')->nullable();
             $table->string('email')->nullable();
             $table->string('phone')->nullable();
-            $table->string('mobile')->nullable();
+            $table->string('mobile', 15)->nullable();
             $table->string('website')->nullable();
             $table->text('address')->nullable();
             $table->string('city')->nullable();
@@ -28,8 +25,8 @@ return new class extends Migration
             // Tax & Legal Information
             $table->string('pan_number')->nullable();
             $table->string('gstin')->nullable();
-            $table->string('cin')->nullable(); // Corporate Identification Number
-            $table->string('tan_number')->nullable(); // Tax Deduction Account Number
+            $table->string('cin')->nullable();
+            $table->string('tan_number')->nullable();
             $table->string('fssai_number')->nullable();
             $table->string('msme_number')->nullable();
 
@@ -59,18 +56,25 @@ return new class extends Migration
             $table->string('instagram_url')->nullable();
 
             // Settings
-            $table->string('financial_year_start')->default('04-01'); // April 1st
+            $table->string('financial_year_start')->default('04-01');
             $table->string('currency', 3)->default('INR');
             $table->string('timezone')->default('Asia/Kolkata');
 
+            // Multi-company support
             $table->boolean('is_active')->default(true);
+            $table->boolean('is_default')->default(false); // Mark default company
+            $table->unsignedBigInteger('created_by')->nullable(); // User who created
             $table->timestamps();
+
+            // Indexes
+            $table->index(['is_active']);
+            $table->index(['is_default']);
+            
+            // Foreign key if you have users table
+            // $table->foreign('created_by')->references('id')->on('users');
         });
     }
 
-    /**
-     * Reverse the migrations.
-     */
     public function down(): void
     {
         Schema::dropIfExists('company_profiles');

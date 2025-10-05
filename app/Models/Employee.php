@@ -5,6 +5,7 @@ namespace App\Models;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\SoftDeletes;
 use Illuminate\Database\Eloquent\Relations\HasMany;
+use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Support\Facades\Storage;
 
 class Employee extends Model
@@ -13,6 +14,7 @@ class Employee extends Model
 
     protected $fillable = [
         'employee_id',
+        'company_profile_id',
         'name',
         'email',
         'phone',
@@ -38,6 +40,11 @@ class Employee extends Model
     ];
 
     // Relationships
+    public function company(): BelongsTo
+    {
+        return $this->belongsTo(CompanyProfile::class, 'company_profile_id');
+    }
+
     public function payments(): HasMany
     {
         return $this->hasMany(EmployeePayment::class);
@@ -49,7 +56,7 @@ class Employee extends Model
         if ($this->photo_path && Storage::disk('public')->exists($this->photo_path)) {
             return Storage::disk('public')->url($this->photo_path);
         }
-        return asset('images/default-avatar.png'); // Default avatar
+        return asset('images/default-avatar.png');
     }
 
     public function getDocumentUrlAttribute()
@@ -82,6 +89,14 @@ class Employee extends Model
         return $query->where('is_active', false);
     }
 
+    public function scopeForCompany($query, $companyId = null)
+    {
+        if ($companyId) {
+            return $query->where('company_profile_id', $companyId);
+        }
+        return $query;
+    }
+
     // Helper methods
     public function getTotalPaidAmount()
     {
@@ -101,10 +116,14 @@ class Employee extends Model
             ->exists();
     }
 
-    // Generate unique employee ID
-    public static function generateEmployeeId()
+    // Generate unique employee ID per company
+    public static function generateEmployeeId($companyId)
     {
-        $lastEmployee = self::withTrashed()->orderBy('id', 'desc')->first();
+        $lastEmployee = self::withTrashed()
+            ->where('company_profile_id', $companyId)
+            ->orderBy('id', 'desc')
+            ->first();
+
         $nextNumber = $lastEmployee ? (int) substr($lastEmployee->employee_id, 3) + 1 : 1;
         return 'EMP' . str_pad($nextNumber, 3, '0', STR_PAD_LEFT);
     }

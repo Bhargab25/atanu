@@ -27,7 +27,7 @@
                 {{-- Company Logo --}}
                 @if($company->exists && $company->logo_path)
                 <div class="w-8 h-8 rounded-lg overflow-hidden bg-base-200 flex-shrink-0">
-                    <img src="{{ $company->logo_url }}"
+                    <img src="{{ $company->getLogoUrl() }}"
                         alt="{{ $company->name ?? 'Company Logo' }}"
                         class="w-full h-full object-contain" />
                 </div>

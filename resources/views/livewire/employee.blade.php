@@ -63,9 +63,24 @@
     <x-mary-modal wire:model="myModal"
         title="{{ $isEdit ? 'Edit Employee' : 'Create Employee' }}"
         subtitle="{{ $isEdit ? 'Update employee details' : 'Add a new employee to the system' }}"
-        size="xl">
+        box-class="backdrop-blur max-w-3xl">
 
         <x-mary-form no-separator>
+            {{-- Company Selection (New Field) --}}
+            <div class="mb-6">
+                <h3 class="text-lg font-semibold text-gray-800 border-b pb-2 mb-4">Company Assignment</h3>
+                <x-mary-select
+                    label="Company *"
+                    wire:model="company_profile_id"
+                    :options="$companyOptions"
+                    option-value="id"
+                    option-label="name"
+                    placeholder="Select a company..."
+                    icon="o-building-office"
+                    hint="Select which company this employee belongs to" />
+            </div>
+
+            {{-- Employee Details --}}
             <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
                 {{-- Personal Information --}}
                 <div class="space-y-4">
@@ -172,6 +187,15 @@
             empty-text="No employees found!"
             wire:model.live="selected"
             selectable>
+
+            @scope('cell_company', $row)
+            <div class="text-sm">
+                <div class="font-medium">{{ $row->company->name ?? 'N/A' }}</div>
+                @if($row->company && $row->company->legal_name)
+                <div class="text-xs text-gray-500">{{ $row->company->legal_name }}</div>
+                @endif
+            </div>
+            @endscope
 
             @scope('cell_photo', $row)
             <div class="avatar">
@@ -308,6 +332,16 @@
         right>
 
         <div class="space-y-4">
+            {{-- Company Filter (New) --}}
+            <div>
+                <label class="block text-sm font-medium mb-2">Company</label>
+                <x-mary-choices
+                    wire:model="companyFilter"
+                    :options="$companyOptions"
+                    clearable
+                    class="text-sm" />
+            </div>
+
             <div>
                 <label class="block text-sm font-medium mb-2">Status</label>
                 <x-mary-choices

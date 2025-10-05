@@ -4,6 +4,7 @@ namespace App\Livewire;
 
 use Livewire\Component;
 use App\Models\Client;
+use App\Models\CompanyProfile;
 use App\Models\ProductCategory;
 use App\Models\Product;
 use Livewire\WithPagination;
@@ -18,6 +19,7 @@ class ClientManagement extends Component
     public $showDrawer = false;
 
     // Form fields
+    public $company_profile_id;
     public $name;
     public $company_name;
     public $email;
@@ -33,7 +35,7 @@ class ClientManagement extends Component
 
     // Services and Items
     public $selectedServices = [];
-    public $serviceItems = []; // Items for each service
+    public $serviceItems = [];
     public $availableServices = [];
 
     // Component state
@@ -42,6 +44,8 @@ class ClientManagement extends Component
     public $search = '';
     public $statusFilter = [];
     public $appliedStatusFilter = [];
+    public $companyFilter = [];
+    public $appliedCompanyFilter = [];
 
     public $sortBy = ['column' => 'name', 'direction' => 'asc'];
     public $perPage = 10;
@@ -57,11 +61,20 @@ class ClientManagement extends Component
         ['id' => 'inactive', 'name' => 'Inactive'],
     ];
 
+    public $companyOptions = [];
+
     protected $listeners = ['refreshClients' => '$refresh'];
 
     public function mount()
     {
         $this->loadServices();
+        $this->loadCompanyOptions();
+
+        // Set default company if only one exists
+        $companies = CompanyProfile::active()->get();
+        if ($companies->count() === 1) {
+            $this->company_profile_id = $companies->first()->id;
+        }
     }
 
     private function loadServices()
@@ -83,6 +96,14 @@ class ClientManagement extends Component
                     })->toArray()
                 ];
             })
+            ->toArray();
+    }
+
+    private function loadCompanyOptions()
+    {
+        $this->companyOptions = CompanyProfile::active()
+            ->get()
+            ->map(fn($company) => ['id' => $company->id, 'name' => $company->name])
             ->toArray();
     }
 
@@ -114,8 +135,8 @@ class ClientManagement extends Component
                 'item_id' => $item['id'],
                 'item_name' => $item['name'],
                 'description' => $item['description'] ?? '',
-                'quantity' => 1, // Default values for invoice generation
-                'price' => 0.00   // Can be set during invoice creation
+                'quantity' => 1,
+                'price' => 0.00
             ];
         }
     }
@@ -153,6 +174,7 @@ class ClientManagement extends Component
             }
         }
     }
+
 
     public function addServiceItem($serviceId, $itemId)
     {
@@ -207,9 +229,10 @@ class ClientManagement extends Component
 
     public function editClient($id)
     {
-        $client = Client::find($id);
+        $client = Client::with('company')->find($id);
         if ($client) {
             $this->clientId = $client->id;
+            $this->company_profile_id = $client->company_profile_id;
             $this->name = $client->name;
             $this->company_name = $client->company_name;
             $this->email = $client->email;
@@ -237,6 +260,7 @@ class ClientManagement extends Component
     public function saveClient()
     {
         $rules = [
+            'company_profile_id' => 'required|exists:company_profiles,id',
             'name' => 'required|string|max:255',
             'company_name' => 'nullable|string|max:255',
             'email' => 'nullable|email|unique:clients,email,' . $this->clientId,
@@ -263,11 +287,13 @@ class ClientManagement extends Component
         }
 
         $this->validate($rules, [
+            'company_profile_id.required' => 'Please select a company.',
             'selectedServices.required' => 'Please select at least one service.',
             'selectedServices.min' => 'Please select at least one service.',
         ]);
 
         $data = [
+            'company_profile_id' => $this->company_profile_id,
             'name' => $this->name,
             'company_name' => $this->company_name,
             'email' => $this->email,
@@ -288,7 +314,8 @@ class ClientManagement extends Component
             $client->update($data);
             $this->success('Client Updated!', 'The client has been updated successfully.');
         } else {
-            $data['client_id'] = Client::generateClientId();
+            // Generate client ID for the specific company
+            $data['client_id'] = Client::generateClientId($this->company_profile_id);
             Client::create($data);
             $this->success('Client Created!', 'The client has been added successfully.');
         }
@@ -339,6 +366,7 @@ class ClientManagement extends Component
     {
         $this->reset([
             'clientId',
+            'company_profile_id',
             'name',
             'company_name',
             'email',
@@ -354,6 +382,12 @@ class ClientManagement extends Component
             'serviceItems'
         ]);
         $this->is_active = true;
+
+        // Set default company if only one exists
+        $companies = CompanyProfile::active()->get();
+        if ($companies->count() === 1) {
+            $this->company_profile_id = $companies->first()->id;
+        }
     }
 
     public function cancel()
@@ -370,13 +404,19 @@ class ClientManagement extends Component
 
     public function resetFilters()
     {
-        $this->reset(['statusFilter', 'appliedStatusFilter']);
+        $this->reset([
+            'statusFilter',
+            'appliedStatusFilter',
+            'companyFilter',
+            'appliedCompanyFilter'
+        ]);
         $this->resetPage();
     }
 
     public function applyFilters()
     {
         $this->appliedStatusFilter = $this->statusFilter;
+        $this->appliedCompanyFilter = $this->companyFilter;
         $this->showDrawer = false;
         $this->resetPage();
         $this->success('Filters Applied!', 'Clients filtered successfully.');
@@ -388,16 +428,20 @@ class ClientManagement extends Component
         $this->resetPage();
     }
 
+
     public function render()
     {
-        $clients = Client::query()
+        $clients = Client::with('company')
             ->when($this->search, function ($query) {
                 return $query->where(function ($subQuery) {
                     $subQuery->where('name', 'like', '%' . $this->search . '%')
                         ->orWhere('client_id', 'like', '%' . $this->search . '%')
                         ->orWhere('company_name', 'like', '%' . $this->search . '%')
                         ->orWhere('email', 'like', '%' . $this->search . '%')
-                        ->orWhere('phone', 'like', '%' . $this->search . '%');
+                        ->orWhere('phone', 'like', '%' . $this->search . '%')
+                        ->orWhereHas('company', function ($companyQuery) {
+                            $companyQuery->where('name', 'like', '%' . $this->search . '%');
+                        });
                 });
             })
             ->when(!empty($this->appliedStatusFilter), function ($query) {
@@ -409,6 +453,9 @@ class ClientManagement extends Component
                 }
                 return $query;
             })
+            ->when(!empty($this->appliedCompanyFilter), function ($query) {
+                return $query->whereIn('company_profile_id', $this->appliedCompanyFilter);
+            })
             ->orderBy($this->sortBy['column'], $this->sortBy['direction'])
             ->paginate($this->perPage);
 
@@ -416,6 +463,7 @@ class ClientManagement extends Component
             ['label' => 'Client ID', 'key' => 'client_id', 'sortable' => true],
             ['label' => 'Name', 'key' => 'name', 'sortable' => true],
             ['label' => 'Company', 'key' => 'company_name', 'sortable' => true],
+            ['label' => 'Owner Company', 'key' => 'owner_company', 'sortable' => false],
             ['label' => 'Contact', 'key' => 'phone', 'sortable' => false],
             ['label' => 'Services', 'key' => 'services', 'sortable' => false],
             ['label' => 'Total Amount', 'key' => 'total_amount', 'sortable' => false],

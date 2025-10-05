@@ -2,9 +2,10 @@
 
 namespace App\Models;
 
-use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
-use Illuminate\Support\Facades\Storage;
+use Illuminate\Database\Eloquent\Model;
+use Illuminate\Database\Eloquent\Builder;
+use Illuminate\Database\Eloquent\Relations\HasMany;
 
 class CompanyProfile extends Model
 {
@@ -48,88 +49,102 @@ class CompanyProfile extends Model
         'financial_year_start',
         'currency',
         'timezone',
-        'is_active'
+        'is_active',
+        'is_default',
+        'created_by'
     ];
 
     protected $casts = [
         'established_date' => 'date',
         'is_active' => 'boolean',
+        'is_default' => 'boolean',
+        'employee_count' => 'integer',
     ];
 
-    // Accessors for file URLs
-    public function getLogoUrlAttribute()
+    // Scopes
+    public function scopeActive(Builder $query): Builder
     {
-        return $this->logo_path ? Storage::url($this->logo_path) : null;
+        return $query->where('is_active', true);
     }
 
-    public function getFaviconUrlAttribute()
+    public function scopeDefault(Builder $query): Builder
     {
-        return $this->favicon_path ? Storage::url($this->favicon_path) : null;
+        return $query->where('is_default', true);
     }
 
-    public function getLetterheadUrlAttribute()
+    public function employees(): HasMany
     {
-        return $this->letterhead_path ? Storage::url($this->letterhead_path) : null;
+        return $this->hasMany(Employee::class, 'company_profile_id');
     }
 
-    public function getSignatureUrlAttribute()
+    public function clients(): HasMany
     {
-        return $this->signature_path ? Storage::url($this->signature_path) : null;
+        return $this->hasMany(Client::class, 'company_profile_id');
     }
 
-    // Get formatted address
-    public function getFullAddressAttribute()
-    {
-        $parts = array_filter([
-            $this->address,
-            $this->city,
-            $this->state,
-            $this->country,
-            $this->postal_code
-        ]);
-
-        return implode(', ', $parts);
-    }
-
-    // Get business type label
-    public function getBusinessTypeLabelAttribute()
-    {
-        $types = [
-            'proprietorship' => 'Proprietorship',
-            'partnership' => 'Partnership',
-            'llp' => 'Limited Liability Partnership (LLP)',
-            'private_limited' => 'Private Limited Company',
-            'public_limited' => 'Public Limited Company',
-            'other' => 'Other'
-        ];
-
-        return $types[$this->business_type] ?? 'Not Specified';
-    }
-
-    // Static method to get company profile (singleton pattern)
+    // Static methods for backward compatibility and convenience
     public static function current()
     {
-        return static::where('is_active', true)->first() ?? new static();
+        $company = static::active()->default()->first();
+
+        if (!$company) {
+            $company = static::active()->first();
+        }
+
+        // Create a default company if none exists
+        if (!$company) {
+            $company = static::create([
+                'name' => config('app.name', 'My Company'),
+                'country' => 'India',
+                'currency' => 'INR',
+                'timezone' => 'Asia/Kolkata',
+                'is_active' => true,
+                'is_default' => true,
+            ]);
+        }
+
+        return $company;
     }
 
-    // Delete associated files when model is deleted
-    protected static function boot()
+
+    public static function getAll()
     {
-        parent::boot();
+        return static::active()->orderBy('name')->get();
+    }
 
-        static::deleting(function ($company) {
-            $files = [
-                $company->logo_path,
-                $company->favicon_path,
-                $company->letterhead_path,
-                $company->signature_path
-            ];
+    public static function setDefault($companyId)
+    {
+        // Remove default from all companies
+        static::where('is_default', true)->update(['is_default' => false]);
 
-            foreach ($files as $file) {
-                if ($file && Storage::exists($file)) {
-                    Storage::delete($file);
-                }
-            }
-        });
+        // Set new default
+        return static::where('id', $companyId)->update(['is_default' => true]);
+    }
+
+    // Relationships
+    public function createdBy()
+    {
+        return $this->belongsTo(User::class, 'created_by');
+    }
+
+    // Helper methods
+    public function getLogoUrl()
+    {
+        return $this->logo_path ? asset('storage/' . $this->logo_path) : null;
+    }
+
+    public function getFaviconUrl()
+    {
+        return $this->favicon_path ? asset('storage/' . $this->favicon_path) : null;
+    }
+
+    public function getLetterheadUrl()
+    {
+        return $this->letterhead_path ? asset('storage/' . $this->letterhead_path) : null;
+    }
+
+    public function getSignatureUrl()
+    {
+        return $this->signature_path ? asset('storage/' . $this->signature_path) : null;
     }
 }

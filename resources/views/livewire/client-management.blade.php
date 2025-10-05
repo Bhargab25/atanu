@@ -64,6 +64,18 @@
         subtitle="{{ $isEdit ? 'Update client details and services' : 'Add a new client with service configuration' }}">
 
         <x-mary-form no-separator>
+            <div class="mb-6 p-4 bg-blue-50 border border-blue-200 rounded-lg">
+                <h3 class="text-lg font-semibold text-blue-800 mb-3">Company Assignment</h3>
+                <x-mary-select
+                    label="Owner Company *"
+                    wire:model="company_profile_id"
+                    :options="$companyOptions"
+                    option-value="id"
+                    option-label="name"
+                    placeholder="Select which company owns this client..."
+                    icon="o-building-office-2"
+                    hint="Select the company that owns/manages this client" />
+            </div>
             <div class="grid grid-cols-1 xl:grid-cols-3 gap-6">
                 {{-- Client Information (Left Column) --}}
                 <div class="xl:col-span-1 space-y-4">
@@ -235,6 +247,15 @@
             wire:model.live="selected"
             selectable>
 
+            @scope('cell_owner_company', $row)
+                <div class="text-sm">
+                    <div class="font-medium text-blue-600">{{ $row->company->name ?? 'N/A' }}</div>
+                    @if($row->company && $row->company->legal_name)
+                        <div class="text-xs text-gray-500">{{ $row->company->legal_name }}</div>
+                    @endif
+                </div>
+            @endscope
+
             @scope('cell_client_id', $row)
             <x-mary-badge :value="$row->client_id" class="badge-outline badge-sm font-mono" />
             @endscope
@@ -385,7 +406,17 @@
         class="w-11/12 lg:w-1/3"
         right>
 
-        <div class="space-y-4">
+         <div class="space-y-4">
+            {{-- Owner Company Filter (New) --}}
+            <div>
+                <label class="block text-sm font-medium mb-2">Owner Company</label>
+                <x-mary-choices
+                    wire:model="companyFilter"
+                    :options="$companyOptions"
+                    clearable
+                    class="text-sm" />
+            </div>
+
             <div>
                 <label class="block text-sm font-medium mb-2">Status</label>
                 <x-mary-choices

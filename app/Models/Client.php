@@ -4,6 +4,8 @@ namespace App\Models;
 
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\SoftDeletes;
+use Illuminate\Database\Eloquent\Relations\BelongsTo;
+use Illuminate\Database\Eloquent\Relations\HasMany;
 
 class Client extends Model
 {
@@ -11,6 +13,7 @@ class Client extends Model
 
     protected $fillable = [
         'client_id',
+        'company_profile_id',
         'name',
         'company_name',
         'email',
@@ -30,6 +33,17 @@ class Client extends Model
         'services_items' => 'array',
         'is_active' => 'boolean',
     ];
+
+    // Relationships
+    public function company(): BelongsTo
+    {
+        return $this->belongsTo(CompanyProfile::class, 'company_profile_id');
+    }
+
+    public function invoices(): HasMany
+    {
+        return $this->hasMany(Invoice::class);
+    }
 
     // Accessors
     public function getFullAddressAttribute()
@@ -86,10 +100,22 @@ class Client extends Model
         return $query->where('is_active', true);
     }
 
-    // Generate unique client ID
-    public static function generateClientId()
+    public function scopeForCompany($query, $companyId = null)
     {
-        $lastClient = self::withTrashed()->orderBy('id', 'desc')->first();
+        if ($companyId) {
+            return $query->where('company_profile_id', $companyId);
+        }
+        return $query;
+    }
+
+    // Generate unique client ID per company
+    public static function generateClientId($companyId)
+    {
+        $lastClient = self::withTrashed()
+            ->where('company_profile_id', $companyId)
+            ->orderBy('id', 'desc')
+            ->first();
+
         $nextNumber = $lastClient ? (int) substr($lastClient->client_id, 2) + 1 : 1;
         return 'CL' . str_pad($nextNumber, 3, '0', STR_PAD_LEFT);
     }
