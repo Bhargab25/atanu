@@ -112,7 +112,7 @@
                 <x-mary-menu-sub title="Clients Management" icon="o-banknotes">
                     <x-mary-menu-item title="Clients" icon="o-users" link="/clients" />
                     <x-mary-menu-item title="Invoices" icon="o-document-text" link="/invoices" />
-                    {{-- <x-mary-menu-item title="Sales Orders" icon="o-shopping-bag" link="/sales-orders" /> --}}
+                    <x-mary-menu-item title="Invoice Payments" icon="o-credit-card" link="/invoice-payments" />
                     <x-mary-menu-item title="Sales Reports" icon="o-presentation-chart-line" link="/sales-reports" />
                 </x-mary-menu-sub>
 

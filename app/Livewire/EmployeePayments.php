@@ -5,6 +5,8 @@ namespace App\Livewire;
 use Livewire\Component;
 use App\Models\EmployeePayment;
 use App\Models\Employee;
+use App\Models\CompanyProfile;
+use App\Models\AccountLedger;
 use Livewire\WithPagination;
 use Mary\Traits\Toast;
 use Carbon\Carbon;
@@ -17,9 +19,39 @@ class EmployeePayments extends Component
     public $monthFilter = '';
     public $statusFilter = '';
     public $employeeFilter = '';
+    public $companyFilter = [];
+    public $appliedCompanyFilter = [];
+
+    // Company management
+    public $selectedCompanyId = null;
+    public $companyOptions = [];
 
     public $sortBy = ['column' => 'payment_date', 'direction' => 'desc'];
     public $perPage = 20;
+
+
+    public function mount()
+    {
+        $this->loadCompanyOptions();
+
+        // Set default company if only one exists
+        if (count($this->companyOptions) === 1) {
+            $this->selectedCompanyId = $this->companyOptions[0]['id'];
+        }
+    }
+
+    private function loadCompanyOptions()
+    {
+        $this->companyOptions = CompanyProfile::active()
+            ->get()
+            ->map(fn($company) => ['id' => $company->id, 'name' => $company->name])
+            ->toArray();
+    }
+
+    public function updatedSelectedCompanyId()
+    {
+        $this->resetPage();
+    }
 
     public function updatedSearch()
     {
@@ -43,13 +75,30 @@ class EmployeePayments extends Component
 
     public function clearFilters()
     {
-        $this->reset(['search', 'monthFilter', 'statusFilter', 'employeeFilter']);
+        $this->reset(['search', 'monthFilter', 'statusFilter', 'employeeFilter', 'companyFilter', 'appliedCompanyFilter']);
+    }
+
+    public function applyFilters()
+    {
+        $this->appliedCompanyFilter = $this->companyFilter;
+        $this->resetPage();
+        $this->success('Filters Applied!', 'Payments filtered successfully.');
     }
 
     public function render()
     {
         $payments = EmployeePayment::query()
-            ->with(['employee', 'creator'])
+            ->with(['employee.company', 'creator'])
+            ->when($this->selectedCompanyId, function ($query) {
+                return $query->whereHas('employee', function ($employeeQuery) {
+                    $employeeQuery->where('company_profile_id', $this->selectedCompanyId);
+                });
+            })
+            ->when(!empty($this->appliedCompanyFilter), function ($query) {
+                return $query->whereHas('employee', function ($employeeQuery) {
+                    $employeeQuery->whereIn('company_profile_id', $this->appliedCompanyFilter);
+                });
+            })
             ->when($this->search, function ($query) {
                 return $query->where(function ($subQuery) {
                     $subQuery->where('payment_id', 'like', '%' . $this->search . '%')
@@ -72,20 +121,43 @@ class EmployeePayments extends Component
             ->orderBy($this->sortBy['column'], $this->sortBy['direction'])
             ->paginate($this->perPage);
 
-        $employees = Employee::active()->orderBy('name')->get();
+        // Filter employees by selected company
+        $employees = Employee::active()
+            ->when($this->selectedCompanyId, function ($query) {
+                return $query->where('company_profile_id', $this->selectedCompanyId);
+            })
+            ->orderBy('name')
+            ->get();
 
-        $totalPaid = EmployeePayment::where('status', 'paid')
-            ->sum('amount');
+        // Calculate totals for selected company
+        $totalPaidQuery = EmployeePayment::where('status', 'paid');
+        $thisMonthPaidQuery = EmployeePayment::where('status', 'paid')
+            ->where('month_year', now()->format('Y-m'));
 
-        $thisMonthPaid = EmployeePayment::where('status', 'paid')
-            ->where('month_year', now()->format('Y-m'))
-            ->sum('amount');
+        if ($this->selectedCompanyId) {
+            $totalPaidQuery->whereHas('employee', function ($query) {
+                $query->where('company_profile_id', $this->selectedCompanyId);
+            });
+            $thisMonthPaidQuery->whereHas('employee', function ($query) {
+                $query->where('company_profile_id', $this->selectedCompanyId);
+            });
+        }
+
+        $totalPaid = $totalPaidQuery->sum('amount');
+        $thisMonthPaid = $thisMonthPaidQuery->sum('amount');
+
+        // Get employee ledger summary for selected company
+        $employeeLedgerSummary = [];
+        if ($this->selectedCompanyId) {
+            $employeeLedgerSummary = AccountLedger::getEmployeeBalances($this->selectedCompanyId);
+        }
 
         return view('livewire.employee-payments', [
             'payments' => $payments,
             'employees' => $employees,
             'totalPaid' => $totalPaid,
             'thisMonthPaid' => $thisMonthPaid,
+            'employeeLedgerSummary' => $employeeLedgerSummary,
         ]);
     }
 }

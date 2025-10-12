@@ -72,10 +72,31 @@ class CompanyProfile extends Model
         return $query->where('is_default', true);
     }
 
+    public function accountLedgers(): HasMany
+    {
+        return $this->hasMany(AccountLedger::class, 'company_profile_id');
+    }
+
+    public function ledgerTransactions(): HasMany
+    {
+        return $this->hasMany(LedgerTransaction::class, 'company_profile_id');
+    }
+
     public function employees(): HasMany
     {
         return $this->hasMany(Employee::class, 'company_profile_id');
     }
+
+    public function expenses(): HasMany
+    {
+        return $this->hasMany(Expense::class, 'company_profile_id');
+    }
+
+    public function expenseCategories(): HasMany
+    {
+        return $this->hasMany(ExpenseCategory::class, 'company_profile_id');
+    }
+
 
     public function clients(): HasMany
     {
@@ -146,5 +167,74 @@ class CompanyProfile extends Model
     public function getSignatureUrl()
     {
         return $this->signature_path ? asset('storage/' . $this->signature_path) : null;
+    }
+
+    public function getTotalExpenses($startDate = null, $endDate = null)
+    {
+        return Expense::getTotalForCompany($this->id, $startDate, $endDate);
+    }
+
+    public function getMonthlyExpenses($month = null, $year = null)
+    {
+        $month = $month ?? date('m');
+        $year = $year ?? date('Y');
+
+        return $this->expenses()
+            ->approved()
+            ->forMonth($month, $year)
+            ->sum('amount');
+    }
+
+    public function getExpensesByCategory($startDate = null, $endDate = null)
+    {
+        $query = $this->expenses()
+            ->with('category')
+            ->approved();
+
+        if ($startDate && $endDate) {
+            $query->forDateRange($startDate, $endDate);
+        }
+
+        return $query->get()
+            ->groupBy('category.name')
+            ->map(function ($expenses) {
+                return [
+                    'total' => $expenses->sum('amount'),
+                    'count' => $expenses->count(),
+                    'average' => $expenses->avg('amount'),
+                ];
+            });
+    }
+
+    public function getTotalCashBalance()
+    {
+        return $this->accountLedgers()
+            ->cashAccounts()
+            ->sum('current_balance');
+    }
+
+    public function getTotalEmployeeBalance()
+    {
+        return $this->accountLedgers()
+            ->employee()
+            ->sum('current_balance');
+    }
+
+    public function getTotalClientBalance()
+    {
+        return $this->accountLedgers()
+            ->clients()
+            ->sum('current_balance');
+    }
+
+    public function getAccountSummary()
+    {
+        return [
+            'cash_balance' => $this->getTotalCashBalance(),
+            'employee_balance' => $this->getTotalEmployeeBalance(),
+            'client_balance' => $this->getTotalClientBalance(),
+            'total_ledgers' => $this->accountLedgers()->active()->count(),
+            'total_transactions' => $this->ledgerTransactions()->count(),
+        ];
     }
 }

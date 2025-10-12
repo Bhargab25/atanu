@@ -10,6 +10,7 @@ class EmployeePayment extends Model
     protected $fillable = [
         'employee_id',
         'payment_id',
+        'payment_type',
         'amount',
         'payment_date',
         'payment_method',
@@ -24,6 +25,28 @@ class EmployeePayment extends Model
         'payment_date' => 'date',
         'amount' => 'decimal:2',
     ];
+
+    public function getPaymentTypeLabelAttribute()
+    {
+        return match ($this->payment_type) {
+            'salary' => 'Regular Salary',
+            'bonus' => 'Bonus',
+            'advance' => 'Advance',
+            'overtime' => 'Overtime',
+            'allowance' => 'Allowance',
+            'adjustment' => 'Adjustment',
+            default => ucfirst($this->payment_type)
+        };
+    }
+
+    public function hasRegularSalaryForMonth($monthYear)
+    {
+        return $this->payments()
+            ->where('month_year', $monthYear)
+            ->where('payment_type', 'salary')
+            ->where('status', 'paid')
+            ->exists();
+    }
 
     // Relationships
     public function employee(): BelongsTo

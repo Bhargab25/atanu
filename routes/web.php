@@ -13,6 +13,7 @@ use App\Livewire\SalesAnalytics;
 use App\Livewire\ExpenseManagement;
 use App\Livewire\SystemSettings;
 use App\Livewire\BackupExport;
+use App\Livewire\FinancialReports;
 use Illuminate\Support\Facades\Route;
 use Illuminate\Support\Facades\Storage;
 use App\Models\Invoice;
@@ -20,6 +21,7 @@ use App\Models\MonthlyBill;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Http\Request;
 use App\Livewire\UserProfile;
+
 
 Route::view('/', 'welcome');
 
@@ -44,6 +46,8 @@ Route::view('dashboard', 'dashboard')
 Route::get('/categories', ProductCategory::class)
     ->middleware(['auth', 'verified'])
     ->name('categories.index');
+
+Route::get('/reports/financial', App\Livewire\FinancialReports::class)->name('reports.financial');
 
 Route::get('/products', Product::class)
     ->middleware(['auth', 'verified'])
@@ -85,6 +89,10 @@ Route::middleware(['auth', 'verified'])->group(function () {
 Route::get('/invoices', InvoiceManagement::class)
     ->middleware(['auth', 'verified'])
     ->name('invoices.index');
+
+Route::get('/invoice-payments', \App\Livewire\InvoicePaymentManagement::class)
+    ->middleware(['auth', 'verified'])
+    ->name('invoice-payments.index');
 
 Route::get('/sales-reports', SalesReports::class)
     ->middleware(['auth', 'verified'])

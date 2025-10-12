@@ -3,6 +3,18 @@
     <x-mary-header title="Expense Management" subtitle="Track and manage business expenses" separator>
         <x-slot:middle class="!justify-end">
             <div class="flex gap-2 items-center">
+                {{-- Company Selection --}}
+                @if(count($companyOptions) > 1)
+                <x-mary-select
+                    wire:model.live="selectedCompanyId"
+                    :options="$companyOptions"
+                    option-value="id"
+                    option-label="name"
+                    placeholder="Select Company..."
+                    icon="o-building-office"
+                    class="w-48" />
+                @endif
+
                 <x-mary-button icon="o-plus" label="Add Category" class="btn-secondary"
                     @click="$wire.openCategoryModal()" />
                 <x-mary-button icon="o-plus" label="Add Expense" class="btn-primary"
@@ -10,6 +22,25 @@
             </div>
         </x-slot:middle>
     </x-mary-header>
+
+    {{-- Company Info Banner (when single company or company selected) --}}
+    @if($selectedCompanyId)
+    @php
+    $selectedCompany = collect($companyOptions)->firstWhere('id', $selectedCompanyId);
+    @endphp
+    <div class="bg-blue-50 border border-blue-200 rounded-lg p-4 mb-6">
+        <div class="flex items-center gap-3">
+            <div class="w-10 h-10 bg-blue-100 rounded-lg flex items-center justify-center">
+                <x-mary-icon name="o-building-office" class="w-6 h-6 text-blue-600" />
+            </div>
+            <div>
+                <h3 class="font-semibold text-blue-900">{{ $selectedCompany['name'] ?? 'Company' }}</h3>
+                <p class="text-sm text-blue-600">Viewing expenses for this company</p>
+            </div>
+        </div>
+    </div>
+    @endif
+
 
     {{-- Statistics Cards --}}
     <div class="grid grid-cols-1 md:grid-cols-4 gap-6 mb-6">
@@ -54,6 +85,62 @@
         </div>
     </div>
 
+    @if($selectedCompanyId && count($expenseLedgerSummary) > 0)
+    <x-mary-card class="mb-6">
+        <x-mary-header title="Expense Ledger Summary" subtitle="Category-wise expense totals" />
+        <div class="grid grid-cols-1 md:grid-cols-4 gap-4">
+            @foreach($expenseLedgerSummary as $summary)
+            <div class="p-4 bg-gray-50 rounded-lg">
+                <div class="flex items-center gap-3 mb-2">
+                    <div class="w-8 h-8 bg-red-100 rounded-lg flex items-center justify-center">
+                        <x-mary-icon name="o-receipt-percent" class="w-5 h-5 text-red-600" />
+                    </div>
+                    <div>
+                        <h4 class="font-semibold text-gray-900 text-sm">{{ $summary['name'] }}</h4>
+                        <p class="text-xs text-gray-500">{{ $summary['category']->name ?? 'N/A' }}</p>
+                    </div>
+                </div>
+                <p class="text-lg font-bold text-red-600">
+                    ₹{{ number_format($summary['balance'], 2) }}
+                    <span class="text-sm font-normal">Total</span>
+                </p>
+            </div>
+            @endforeach
+        </div>
+    </x-mary-card>
+    @endif
+
+    {{-- Add Cash & Bank Summary --}}
+    @if($selectedCompanyId)
+    @php
+    $cashBankSummary = \App\Models\AccountLedger::getCashAndBankSummary($selectedCompanyId);
+    @endphp
+    @if(count($cashBankSummary) > 0)
+    <x-mary-card class="mb-6">
+        <x-mary-header title="Cash & Bank Summary" subtitle="Available balances" />
+        <div class="grid grid-cols-1 md:grid-cols-4 gap-4">
+            @foreach($cashBankSummary as $summary)
+            <div class="p-4 bg-green-50 rounded-lg">
+                <div class="flex items-center gap-3 mb-2">
+                    <div class="w-8 h-8 bg-green-100 rounded-lg flex items-center justify-center">
+                        <x-mary-icon name="{{ $summary['type'] === 'cash' ? 'o-banknotes' : 'o-building-library' }}" class="w-5 h-5 text-green-600" />
+                    </div>
+                    <div>
+                        <h4 class="font-semibold text-gray-900 text-sm">{{ $summary['name'] }}</h4>
+                        <p class="text-xs text-gray-500">{{ ucfirst($summary['type']) }}</p>
+                    </div>
+                </div>
+                <p class="text-lg font-bold {{ $summary['balance'] >= 0 ? 'text-green-600' : 'text-red-600' }}">
+                    ₹{{ number_format(abs($summary['balance']), 2) }}
+                    <span class="text-sm font-normal">{{ $summary['balance'] >= 0 ? 'Available' : 'Overdrawn' }}</span>
+                </p>
+            </div>
+            @endforeach
+        </div>
+    </x-mary-card>
+    @endif
+    @endif
+
     {{-- Date Range Filter --}}
     <x-mary-card class="mb-6">
         <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
@@ -78,13 +165,21 @@
         </div>
     </div>
 
+
     {{-- Tab Content --}}
     @if($activeTab === 'expenses')
     {{-- Filters --}}
     <x-mary-card class="mb-6">
-        <div class="grid grid-cols-1 md:grid-cols-5 gap-4">
+        <div class="grid grid-cols-1 md:grid-cols-6 gap-4">
             <x-mary-input label="Search" wire:model.live.debounce.300ms="search"
                 placeholder="Title, ref, description..." icon="o-magnifying-glass" />
+
+            {{-- Company Filter (only show if multiple companies) --}}
+            @if(count($companyOptions) > 1)
+            <x-mary-select label="Company" wire:model.live="companyFilter"
+                :options="$companyOptions" option-value="id" option-label="name"
+                placeholder="All Companies" />
+            @endif
 
             <x-mary-select label="Category" wire:model.live="categoryFilter"
                 :options="$expenseCategories" option-value="id" option-label="name"
@@ -92,30 +187,30 @@
 
             <x-mary-select label="Status" wire:model.live="statusFilter"
                 :options="[
-                        ['value' => '', 'label' => 'All Status'],
-                        ['value' => 'pending', 'label' => 'Pending'],
-                        ['value' => 'approved', 'label' => 'Approved'],
-                        ['value' => 'rejected', 'label' => 'Rejected']
-                    ]" option-value="value" option-label="label" />
+                            ['value' => '', 'label' => 'All Status'],
+                            ['value' => 'pending', 'label' => 'Pending'],
+                            ['value' => 'approved', 'label' => 'Approved'],
+                            ['value' => 'rejected', 'label' => 'Rejected']
+                        ]" option-value="value" option-label="label" />
 
             <x-mary-select label="Payment Method" wire:model.live="paymentMethodFilter"
                 :options="[
-                        ['value' => '', 'label' => 'All Methods'],
-                        ['value' => 'cash', 'label' => 'Cash'],
-                        ['value' => 'bank', 'label' => 'Bank'],
-                        ['value' => 'upi', 'label' => 'UPI'],
-                        ['value' => 'card', 'label' => 'Card'],
-                        ['value' => 'cheque', 'label' => 'Cheque']
-                    ]" option-value="value" option-label="label" />
+                            ['value' => '', 'label' => 'All Methods'],
+                            ['value' => 'cash', 'label' => 'Cash'],
+                            ['value' => 'bank', 'label' => 'Bank'],
+                            ['value' => 'upi', 'label' => 'UPI'],
+                            ['value' => 'card', 'label' => 'Card'],
+                            ['value' => 'cheque', 'label' => 'Cheque']
+                        ]" option-value="value" option-label="label" />
 
             <div class="flex items-end">
                 <x-mary-select label="Per Page" wire:model.live="perPage"
                     :options="[
-                            ['value' => 10, 'label' => '10'],
-                            ['value' => 15, 'label' => '15'],
-                            ['value' => 25, 'label' => '25'],
-                            ['value' => 50, 'label' => '50']
-                        ]" option-value="value" option-label="label" />
+                                ['value' => 10, 'label' => '10'],
+                                ['value' => 15, 'label' => '15'],
+                                ['value' => 25, 'label' => '25'],
+                                ['value' => 50, 'label' => '50']
+                            ]" option-value="value" option-label="label" />
             </div>
         </div>
     </x-mary-card>
@@ -124,16 +219,17 @@
     <x-mary-card>
         <x-mary-table
             :headers="[
-                    ['label' => '#', 'key' => 'sl_no'],
-                    ['label' => 'Ref No.', 'key' => 'expense_ref'],
-                    ['label' => 'Title', 'key' => 'title'],
-                    ['label' => 'Category', 'key' => 'category'],
-                    ['label' => 'Amount', 'key' => 'amount'],
-                    ['label' => 'Date', 'key' => 'date'],
-                    ['label' => 'Payment', 'key' => 'payment'],
-                    ['label' => 'Status', 'key' => 'status'],
-                    ['label' => 'Actions', 'key' => 'actions']
-                ]"
+                        ['label' => '#', 'key' => 'sl_no'],
+                        ['label' => 'Ref No.', 'key' => 'expense_ref'],
+                        ['label' => 'Title', 'key' => 'title'],
+                        ['label' => 'Company', 'key' => 'company'],
+                        ['label' => 'Category', 'key' => 'category'],
+                        ['label' => 'Amount', 'key' => 'amount'],
+                        ['label' => 'Date', 'key' => 'date'],
+                        ['label' => 'Payment', 'key' => 'payment'],
+                        ['label' => 'Status', 'key' => 'status'],
+                        ['label' => 'Actions', 'key' => 'actions']
+                    ]"
             :rows="$expenses"
             striped
             with-pagination>
@@ -154,6 +250,15 @@
             @if($expense->description)
             <div class="text-sm text-gray-500 truncate max-w-xs">{{ $expense->description }}</div>
             @endif
+            @endscope
+
+            @scope('cell_company', $expense)
+            <div class="text-sm">
+                <div class="font-medium text-blue-600">{{ $expense->company->name ?? 'N/A' }}</div>
+                @if($expense->company && $expense->company->legal_name)
+                <div class="text-xs text-gray-500">{{ $expense->company->legal_name }}</div>
+                @endif
+            </div>
             @endscope
 
             @scope('cell_category', $expense)
@@ -210,13 +315,14 @@
     <x-mary-card>
         <x-mary-table
             :headers="[
-                    ['label' => '#', 'key' => 'sl_no'],
-                    ['label' => 'Name', 'key' => 'name'],
-                    ['label' => 'Description', 'key' => 'description'],
-                    ['label' => 'Expenses Count', 'key' => 'count'],
-                    ['label' => 'Status', 'key' => 'status'],
-                    ['label' => 'Actions', 'key' => 'actions']
-                ]"
+                ['label' => '#', 'key' => 'sl_no'],
+                ['label' => 'Name', 'key' => 'name'],
+                ['label' => 'Company', 'key' => 'company'],
+                ['label' => 'Description', 'key' => 'description'],
+                ['label' => 'Expenses Count', 'key' => 'count'],
+                ['label' => 'Status', 'key' => 'status'],
+                ['label' => 'Actions', 'key' => 'actions']
+            ]"
             :rows="$categories"
             striped
             with-pagination>
@@ -227,6 +333,15 @@
 
             @scope('cell_name', $category)
             <div class="font-medium">{{ $category->name }}</div>
+            @endscope
+
+            @scope('cell_company', $category)
+            <div class="text-sm">
+                <div class="font-medium text-blue-600">{{ $category->company->name ?? 'N/A' }}</div>
+                @if($category->company && $category->company->legal_name)
+                <div class="text-xs text-gray-500">{{ $category->company->legal_name }}</div>
+                @endif
+            </div>
             @endscope
 
             @scope('cell_description', $category)
@@ -246,6 +361,8 @@
             <div class="flex gap-1">
                 <x-mary-button icon="o-pencil" class="btn-circle btn-ghost btn-xs text-primary"
                     tooltip="Edit" />
+                <x-mary-button icon="o-trash" class="btn-circle btn-ghost btn-xs text-error"
+                    tooltip="Delete" />
             </div>
             @endscope
         </x-mary-table>
@@ -258,6 +375,17 @@
         box-class="backdrop-blur max-w-4xl">
 
         <div class="space-y-6">
+            {{-- Company Selection (New Section) --}}
+            <div class="p-4 bg-blue-50 border border-blue-200 rounded-lg">
+                <h3 class="text-lg font-semibold text-blue-800 mb-3">Company Assignment</h3>
+                <x-mary-select label="Company *" wire:model="companyProfileId"
+                    :options="$companyOptions" option-value="id" option-label="name"
+                    placeholder="Select company..."
+                    icon="o-building-office"
+                    hint="Select which company this expense belongs to"
+                    :error="$errors->first('companyProfileId')" />
+            </div>
+
             <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
                 <x-mary-input label="Expense Title *" wire:model="expenseTitle"
                     placeholder="Enter expense title"
@@ -320,22 +448,49 @@
         </x-slot:actions>
     </x-mary-modal>
 
+
     {{-- Add Category Modal --}}
     <x-mary-modal wire:model="showCategoryModal" title="Add New Category"
         box-class="backdrop-blur max-w-lg">
 
         <div class="space-y-4">
+            {{-- Company Info Display --}}
+            @if($selectedCompanyId)
+            @php
+            $selectedCompany = collect($companyOptions)->firstWhere('id', $selectedCompanyId);
+            @endphp
+            <div class="p-3 bg-blue-50 border border-blue-200 rounded-lg">
+                <div class="flex items-center gap-2">
+                    <x-mary-icon name="o-building-office" class="w-5 h-5 text-blue-600" />
+                    <div>
+                        <p class="text-sm font-medium text-blue-900">{{ $selectedCompany['name'] ?? 'Company' }}</p>
+                        <p class="text-xs text-blue-600">Category will be created for this company</p>
+                    </div>
+                </div>
+            </div>
+            @else
+            <div class="p-3 bg-orange-50 border border-orange-200 rounded-lg">
+                <div class="flex items-center gap-2">
+                    <x-mary-icon name="o-exclamation-triangle" class="w-5 h-5 text-orange-600" />
+                    <p class="text-sm text-orange-800">Please select a company first to create categories</p>
+                </div>
+            </div>
+            @endif
+
             <x-mary-input label="Category Name *" wire:model="categoryName"
-                placeholder="Enter category name" />
+                placeholder="Enter category name"
+                :disabled="!$selectedCompanyId" />
 
             <x-mary-textarea label="Description" wire:model="categoryDescription"
-                placeholder="Enter category description..." rows="3" />
+                placeholder="Enter category description..." rows="3"
+                :disabled="!$selectedCompanyId" />
         </div>
 
         <x-slot:actions>
             <x-mary-button label="Cancel" @click="$wire.closeCategoryModal()" />
             <x-mary-button label="Save Category" class="btn-primary"
-                spinner="saveCategory" @click="$wire.saveCategory()" />
+                spinner="saveCategory" @click="$wire.saveCategory()"
+                :disabled="!$selectedCompanyId" />
         </x-slot:actions>
     </x-mary-modal>
 
@@ -346,6 +501,19 @@
 
         @if($viewingExpense)
         <div class="space-y-6">
+            {{-- Company Info --}}
+            <div class="p-4 bg-gray-50 border border-gray-200 rounded-lg">
+                <div class="flex items-center gap-3">
+                    <div class="w-10 h-10 bg-blue-100 rounded-lg flex items-center justify-center">
+                        <x-mary-icon name="o-building-office" class="w-6 h-6 text-blue-600" />
+                    </div>
+                    <div>
+                        <label class="text-sm font-medium text-gray-600">Company</label>
+                        <p class="font-medium">{{ $viewingExpense->company->name ?? 'N/A' }}</p>
+                    </div>
+                </div>
+            </div>
+
             <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
                 <div>
                     <label class="text-sm font-medium text-gray-600">Title</label>
@@ -404,9 +572,49 @@
                 </div>
             </div>
         </div>
+        {{-- Add Ledger Information Section --}}
+        <div class="mt-6 p-4 bg-blue-50 border border-blue-200 rounded-lg">
+            <div class="flex items-center gap-3 mb-3">
+                <x-mary-icon name="o-book-open" class="w-5 h-5 text-blue-600" />
+                <h4 class="font-semibold text-blue-800">Ledger Information</h4>
+            </div>
+
+            @php
+            $ledgerTransactions = \App\Models\LedgerTransaction::where('reference', $viewingExpense->expense_ref)
+            ->where('company_profile_id', $viewingExpense->company_profile_id)
+            ->with('ledger')
+            ->get();
+            @endphp
+
+            @if($ledgerTransactions->count() > 0)
+            <div class="space-y-2">
+                @foreach($ledgerTransactions as $transaction)
+                <div class="flex justify-between items-center p-2 bg-white rounded">
+                    <div>
+                        <p class="font-medium text-sm">{{ $transaction->ledger->ledger_name }}</p>
+                        <p class="text-xs text-gray-600">{{ $transaction->description }}</p>
+                    </div>
+                    <div class="text-right">
+                        <p class="font-bold {{ $transaction->debit_amount > 0 ? 'text-red-600' : 'text-green-600' }}">
+                            {{ $transaction->debit_amount > 0 ? 'Dr.' : 'Cr.' }} ₹{{ number_format($transaction->amount, 2) }}
+                        </p>
+                    </div>
+                </div>
+                @endforeach
+            </div>
+            @else
+            <p class="text-blue-700 text-sm">No ledger entries found for this expense.</p>
+            @endif
+        </div>
         @endif
 
         <x-slot:actions>
+            @if($viewingExpense && $viewingExpense->approval_status === 'pending')
+            <x-mary-button label="Approve" class="btn-success"
+                @click="$wire.approveExpense({{ $viewingExpense->id }})" />
+            <x-mary-button label="Reject" class="btn-error"
+                @click="$wire.rejectExpense({{ $viewingExpense->id }})" />
+            @endif
             <x-mary-button label="Close" @click="$wire.closeViewModal()" />
         </x-slot:actions>
     </x-mary-modal>

@@ -1,6 +1,14 @@
 <div>
     <x-mary-header title="Employee Profile" subtitle="{{ $employee->name }} - {{ $employee->employee_id }}" separator>
         <x-slot:actions>
+            {{-- Company Info Badge --}}
+            @if($employee->company)
+            <div class="flex items-center gap-2 px-3 py-1 bg-blue-100 text-blue-800 rounded-lg text-sm">
+                <x-mary-icon name="o-building-office" class="w-4 h-4" />
+                {{ $employee->company->name }}
+            </div>
+            @endif
+
             <x-mary-button icon="o-pencil" label="Edit Employee" class="btn-outline btn-sm"
                 link="/employees" />
             <x-mary-button icon="o-credit-card" label="Pay Salary" class="btn-primary btn-sm"
@@ -25,6 +33,26 @@
                         :value="$employee->is_active ? 'Active' : 'Inactive'"
                         :class="$employee->is_active ? 'badge-success mt-2' : 'badge-error mt-2'" />
                 </div>
+
+                {{-- Company Information --}}
+                @if($employee->company)
+                <div class="space-y-4 mb-6">
+                    <h4 class="font-semibold text-gray-800 border-b pb-2">Company Information</h4>
+                    <div class="p-3 bg-blue-50 rounded-lg">
+                        <div class="flex items-center gap-3">
+                            <div class="w-8 h-8 bg-blue-100 rounded-lg flex items-center justify-center">
+                                <x-mary-icon name="o-building-office" class="w-5 h-5 text-blue-600" />
+                            </div>
+                            <div>
+                                <p class="font-medium text-blue-900">{{ $employee->company->name }}</p>
+                                @if($employee->company->legal_name)
+                                <p class="text-sm text-blue-600">{{ $employee->company->legal_name }}</p>
+                                @endif
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                @endif
 
                 {{-- Contact Information --}}
                 <div class="space-y-4">
@@ -119,50 +147,71 @@
 
         {{-- Payment History & Stats --}}
         <div class="xl:col-span-2">
-            {{-- Statistics Cards --}}
-            <div class="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6">
-                <x-mary-card class="bg-gradient-to-r from-blue-50 to-blue-100">
-                    <div class="flex items-center gap-4">
-                        <div class="w-12 h-12 bg-blue-500 rounded-full flex items-center justify-center">
-                            <x-mary-icon name="o-currency-dollar" class="w-6 h-6 text-white" />
-                        </div>
-                        <div>
-                            <div class="text-xs text-gray-600 uppercase tracking-wide">Total Paid</div>
-                            <div class="text-xl font-bold text-gray-800">₹{{ number_format($totalPaid, 2) }}</div>
-                        </div>
-                    </div>
-                </x-mary-card>
+            {{-- Account Ledger Summary --}}
+            <x-mary-card class="mb-6">
+                <x-mary-header title="Account Ledger Summary" subtitle="Employee account balance and financial overview" />
 
-                <x-mary-card class="bg-gradient-to-r from-green-50 to-green-100">
-                    <div class="flex items-center gap-4">
-                        <div class="w-12 h-12 bg-green-500 rounded-full flex items-center justify-center">
-                            <x-mary-icon name="o-calendar" class="w-6 h-6 text-white" />
-                        </div>
-                        <div>
-                            <div class="text-xs text-gray-600 uppercase tracking-wide">This Year</div>
-                            <div class="text-xl font-bold text-gray-800">₹{{ number_format($paymentsThisYear, 2) }}</div>
-                        </div>
+                <div class="grid grid-cols-1 md:grid-cols-4 gap-4">
+                    <div class="text-center p-4 bg-blue-50 rounded-lg">
+                        <h3 class="text-sm font-medium text-blue-600">Current Balance</h3>
+                        <p class="text-2xl font-bold {{ $ledgerBalance < 0 ? 'text-red-600' : 'text-green-600' }}">
+                            ₹{{ number_format(abs($ledgerBalance), 2) }}
+                        </p>
+                        <p class="text-xs text-gray-600">{{ $ledgerBalance < 0 ? 'Amount Outstanding' : 'Advance Paid' }}</p>
                     </div>
-                </x-mary-card>
 
-                <x-mary-card class="bg-gradient-to-r from-purple-50 to-purple-100">
-                    <div class="flex items-center gap-4">
-                        <div class="w-12 h-12 bg-purple-500 rounded-full flex items-center justify-center">
-                            <x-mary-icon name="o-clock" class="w-6 h-6 text-white" />
-                        </div>
+                    <div class="text-center p-4 bg-green-50 rounded-lg">
+                        <h3 class="text-sm font-medium text-green-600">Total Paid</h3>
+                        <p class="text-2xl font-bold text-green-600">₹{{ number_format($totalPaid, 2) }}</p>
+                        <p class="text-xs text-gray-600">All time payments</p>
+                    </div>
+
+                    <div class="text-center p-4 bg-purple-50 rounded-lg">
+                        <h3 class="text-sm font-medium text-purple-600">This Year</h3>
+                        <p class="text-2xl font-bold text-purple-600">₹{{ number_format($paymentsThisYear, 2) }}</p>
+                        <p class="text-xs text-gray-600">{{ date('Y') }} payments</p>
+                    </div>
+
+                    <div class="text-center p-4 bg-orange-50 rounded-lg">
+                        <h3 class="text-sm font-medium text-orange-600">Last Payment</h3>
+                        <p class="text-lg font-bold text-orange-600">
+                            @if($lastPayment)
+                            {{ $lastPayment->payment_date->format('d M, Y') }}
+                            @else
+                            No payments
+                            @endif
+                        </p>
+                        <p class="text-xs text-gray-600">Latest transaction</p>
+                    </div>
+                </div>
+            </x-mary-card>
+
+            {{-- Recent Ledger Transactions --}}
+            @if(count($ledgerTransactions) > 0)
+            <x-mary-card class="mb-6">
+                <x-mary-header title="Recent Ledger Transactions" subtitle="Latest account movements and adjustments" />
+
+                <div class="space-y-3">
+                    @foreach($ledgerTransactions as $transaction)
+                    <div class="flex justify-between items-center p-3 bg-gray-50 rounded-lg">
                         <div>
-                            <div class="text-xs text-gray-600 uppercase tracking-wide">Last Payment</div>
-                            <div class="text-lg font-bold text-gray-800">
-                                @if($lastPayment)
-                                {{ $lastPayment->payment_date->format('d M, Y') }}
-                                @else
-                                No payments
-                                @endif
-                            </div>
+                            <p class="font-medium">{{ $transaction->description }}</p>
+                            <p class="text-sm text-gray-600">{{ $transaction->date->format('d/m/Y') }} • {{ ucfirst($transaction->type) }}</p>
+                            @if($transaction->reference)
+                            <p class="text-xs text-blue-600">Ref: {{ $transaction->reference }}</p>
+                            @endif
+                        </div>
+                        <div class="text-right">
+                            <p class="font-bold {{ $transaction->debit_amount > 0 ? 'text-green-600' : 'text-red-600' }}">
+                                {{ $transaction->debit_amount > 0 ? '+' : '-' }}₹{{ number_format($transaction->amount, 2) }}
+                            </p>
+                            <p class="text-xs text-gray-500">{{ $transaction->transaction_type }}</p>
                         </div>
                     </div>
-                </x-mary-card>
-            </div>
+                    @endforeach
+                </div>
+            </x-mary-card>
+            @endif
 
             {{-- Payment History --}}
             <x-mary-card>
@@ -186,6 +235,7 @@
                                 <th>Reference</th>
                                 <th>Status</th>
                                 <th>Processed By</th>
+                                <th>Actions</th>
                             </tr>
                         </thead>
                         <tbody>
@@ -259,12 +309,21 @@
     <x-mary-modal wire:model="showPaymentModal"
         title="Process Salary Payment"
         subtitle="Record a new salary payment for {{ $employee->name }}"
-        size="lg">
+        size="lg" box-class="border w-full max-w-4xl">
 
         <x-mary-form no-separator>
             <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
                 <div class="space-y-4">
                     <h3 class="text-lg font-semibold text-gray-800 border-b pb-2">Payment Details</h3>
+
+                    <x-mary-select
+                        label="Payment Type *"
+                        icon="o-tag"
+                        wire:model="payment_type"
+                        :options="$paymentTypes"
+                        option-value="value"
+                        option-label="label"
+                        hint="Select the type of payment" />
 
                     <x-mary-input
                         label="Payment Amount *"
@@ -323,6 +382,11 @@
                         <strong>Employee:</strong> {{ $employee->name }} ({{ $employee->employee_id }})
                         <br>
                         <strong>Regular Salary:</strong> ₹{{ number_format($employee->salary_amount, 2) }}
+                        <br>
+                        <strong>Current Balance:</strong>
+                        <span class="{{ $ledgerBalance < 0 ? 'text-red-600' : 'text-green-600' }}">
+                            ₹{{ number_format(abs($ledgerBalance), 2) }} {{ $ledgerBalance < 0 ? 'Outstanding' : 'Advance' }}
+                        </span>
                     </div>
                 </div>
             </div>
@@ -337,7 +401,6 @@
             </x-slot:actions>
         </x-mary-form>
     </x-mary-modal>
-
 
     {{-- WhatsApp Modal --}}
     <x-mary-modal wire:model="showWhatsAppModal" title="Send Payment Receipt via WhatsApp" size="lg">
@@ -405,5 +468,4 @@
             });
         });
     </script>
-
 </div>

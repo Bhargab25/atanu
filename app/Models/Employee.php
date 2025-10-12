@@ -108,10 +108,11 @@ class Employee extends Model
         return $this->payments()->where('status', 'paid')->latest()->first();
     }
 
-    public function hasPaymentForMonth($monthYear)
+    public function hasPaymentForMonth($monthYear, $paymentType = 'salary')
     {
         return $this->payments()
             ->where('month_year', $monthYear)
+            ->where('payment_type', $paymentType)
             ->where('status', 'paid')
             ->exists();
     }

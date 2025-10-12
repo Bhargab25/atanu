@@ -1,75 +1,41 @@
 <?php
-// app/Services/InvoicePdfService.php
 
 namespace App\Services;
 
 use App\Models\Invoice;
-use App\Models\MonthlyBill;
 use Barryvdh\DomPDF\Facade\Pdf;
 use Illuminate\Support\Facades\Storage;
+use Illuminate\Support\Facades\View;
 
 class InvoicePdfService
 {
     public function generateInvoicePdf(Invoice $invoice)
     {
-        $data = [
-            'invoice' => $invoice->load(['client', 'items.product']),
-            'company' => $this->getCompanyDetails(),
-        ];
+        // Load the invoice with relationships
+        $invoice->load(['client', 'company']);
 
-        // Change from 'pdf.invoice' to 'pdfs.invoice'
-        $pdf = Pdf::loadView('pdfs.invoice', $data);
+        // Generate PDF
+        $pdf = Pdf::loadView('pdf.invoice', compact('invoice'));
+
+        // Set paper size and orientation
         $pdf->setPaper('A4', 'portrait');
 
-        $filename = "invoice_{$invoice->invoice_number}.pdf";
-        $path = storage_path("app/public/invoices/{$filename}");
+        // Generate filename
+        $filename = 'invoices/' . $invoice->invoice_number . '.pdf';
 
-        // Ensure directory exists
-        if (!file_exists(dirname($path))) {
-            mkdir(dirname($path), 0755, true);
-        }
+        // Save PDF
+        Storage::disk('public')->put($filename, $pdf->output());
 
-        $pdf->save($path);
-
-        return $path;
+        return $filename;
     }
 
-    public function generateMonthlyBillPdf(MonthlyBill $monthlyBill)
+    public function getInvoicePdfPath(Invoice $invoice)
     {
-        $data = [
-            'monthlyBill' => $monthlyBill->load(['client', 'invoices']),
-            'company' => $this->getCompanyDetails(),
-        ];
-
-        // Change from 'pdf.monthly-bill' to 'pdfs.monthly-bill'
-        $pdf = Pdf::loadView('pdfs.monthly-bill', $data);
-        $pdf->setPaper('A4', 'portrait');
-
-        $filename = "monthly_bill_{$monthlyBill->bill_number}.pdf";
-        $path = storage_path("app/public/bills/{$filename}");
-
-        // Ensure directory exists
-        if (!file_exists(dirname($path))) {
-            mkdir(dirname($path), 0755, true);
-        }
-
-        $pdf->save($path);
-
-        return $path;
+        return 'invoices/' . $invoice->invoice_number . '.pdf';
     }
 
-    private function getCompanyDetails()
+    public function invoicePdfExists(Invoice $invoice)
     {
-        return [
-            'name' => config('app.company_name', 'NEW ANNAPURNA FRUIT SHOP'),
-            'address' => config('app.company_address', '9 M Block, New Market'),
-            'city' => config('app.company_city', 'Kolkata'),
-            'state' => config('app.company_state', 'West Bengal'),
-            'pincode' => config('app.company_pincode', '700087'),
-            'phone' => config('app.company_phone', '+91 8436833830 / +91 9732615108'),
-            'email' => config('app.company_email', 'info@company.com'),
-            'gstin' => config('app.company_gstin', '12823019000867'),
-            'pan' => config('app.company_pan', 'XXXXXXXXXX'),
-        ];
+        return Storage::disk('public')->exists($this->getInvoicePdfPath($invoice));
     }
 }
