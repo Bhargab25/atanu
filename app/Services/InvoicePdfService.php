@@ -15,7 +15,7 @@ class InvoicePdfService
         $invoice->load(['client', 'company']);
 
         // Generate PDF
-        $pdf = Pdf::loadView('pdf.invoice', compact('invoice'));
+        $pdf = Pdf::loadView('pdfs.invoice', compact('invoice'));
 
         // Set paper size and orientation
         $pdf->setPaper('A4', 'portrait');

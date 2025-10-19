@@ -41,7 +41,6 @@ class AccountLedger extends Model
         return $this->morphTo();
     }
 
-
     public function transactions(): HasMany
     {
         return $this->hasMany(LedgerTransaction::class, 'ledger_id');
@@ -76,6 +75,12 @@ class AccountLedger extends Model
         return $query->where('ledger_type', 'expenses');
     }
 
+    // ADD: Income scope for profit/loss tracking
+    public function scopeIncome($query)
+    {
+        return $query->where('ledger_type', 'income');
+    }
+
     public function scopeClients($query)
     {
         return $query->where('ledger_type', 'client');
@@ -107,40 +112,72 @@ class AccountLedger extends Model
         return $this->current_balance >= 0 ? 'debit' : 'credit';
     }
 
-    // Update current balance based on transaction
+    // FIXED: Proper balance calculation based on ledger type
     public function updateBalance()
     {
         $totalDebits = $this->transactions()->sum('debit_amount');
         $totalCredits = $this->transactions()->sum('credit_amount');
 
-        // Calculate current balance based on opening balance
-        if ($this->opening_balance_type === 'debit') {
-            $this->current_balance = $this->opening_balance + $totalDebits - $totalCredits;
-        } else {
-            $this->current_balance = $totalCredits - $totalDebits - $this->opening_balance;
+        // Calculate balance based on account type and opening balance type
+        switch ($this->ledger_type) {
+            case 'cash':
+            case 'bank':
+            case 'client':
+            case 'expenses':
+                // Asset and Expense accounts: Debit increases, Credit decreases
+                if ($this->opening_balance_type === 'debit') {
+                    $this->current_balance = $this->opening_balance + $totalDebits - $totalCredits;
+                } else {
+                    $this->current_balance = $totalDebits - $totalCredits - $this->opening_balance;
+                }
+                break;
+
+            case 'employee':
+            case 'income':
+                // Liability and Income accounts: Credit increases, Debit decreases
+                if ($this->opening_balance_type === 'credit') {
+                    $this->current_balance = $this->opening_balance + $totalCredits - $totalDebits;
+                } else {
+                    $this->current_balance = $totalCredits - $totalDebits - $this->opening_balance;
+                }
+                break;
+
+            default:
+                // Default calculation
+                if ($this->opening_balance_type === 'debit') {
+                    $this->current_balance = $this->opening_balance + $totalDebits - $totalCredits;
+                } else {
+                    $this->current_balance = $this->opening_balance + $totalCredits - $totalDebits;
+                }
         }
 
         $this->save();
         return $this->current_balance;
     }
 
+    // FIXED: Simplified recalculation method
     public function recalculateBalance()
     {
-        $totalDebits = $this->transactions()->sum('debit_amount');
-        $totalCredits = $this->transactions()->sum('credit_amount');
-
-        $this->current_balance = $this->opening_balance + ($totalDebits - $totalCredits);
-        $this->save();
+        return $this->updateBalance();
     }
 
-    // Get formatted balance with Dr/Cr
+    // Get formatted balance with Dr/Cr based on ledger type
     public function getFormattedBalance()
     {
         $amount = abs($this->current_balance);
-        $type = $this->current_balance >= 0 ? 'Dr' : 'Cr';
+
+        // Determine if balance is normal for this account type
+        $isNormalBalance = match ($this->ledger_type) {
+            'cash', 'bank', 'client', 'expenses' => $this->current_balance >= 0, // Asset/Expense: Debit normal
+            'employee', 'income' => $this->current_balance <= 0, // Liability/Income: Credit normal
+            default => $this->current_balance >= 0
+        };
+
+        $type = $isNormalBalance ?
+            (in_array($this->ledger_type, ['cash', 'bank', 'client', 'expenses']) ? 'Dr' : 'Cr') : (in_array($this->ledger_type, ['cash', 'bank', 'client', 'expenses']) ? 'Cr' : 'Dr');
+
         return '₹' . number_format($amount, 2) . ' ' . $type;
     }
-
 
     // Static methods for company-specific operations
     public static function createForEmployee($companyId, $employee)
@@ -152,11 +189,12 @@ class AccountLedger extends Model
             'ledgerable_id' => $employee->id,
             'ledgerable_type' => get_class($employee),
             'opening_balance' => 0,
-            'opening_balance_type' => 'credit',
+            'opening_balance_type' => 'credit', // Liability account
             'current_balance' => 0,
             'is_active' => true,
         ]);
     }
+
     public static function createForClient($companyId, $client)
     {
         return static::create([
@@ -166,36 +204,33 @@ class AccountLedger extends Model
             'ledgerable_id' => $client->id,
             'ledgerable_type' => get_class($client),
             'opening_balance' => 0,
-            'opening_balance_type' => 'debit',
+            'opening_balance_type' => 'debit', // Asset account (Accounts Receivable)
             'current_balance' => 0,
             'is_active' => true,
         ]);
     }
-    public static function createForExpense($companyId, $expense)
+
+    public static function createForExpenseCategory($companyId, $category)
     {
         return static::create([
             'company_profile_id' => $companyId,
-            'ledger_name' => $expense->title,
+            'ledger_name' => $category->name . ' Expenses',
             'ledger_type' => 'expenses',
-            'ledgerable_id' => $expense->id,
-            'ledgerable_type' => get_class($expense),
+            'ledgerable_id' => $category->id,
+            'ledgerable_type' => get_class($category),
             'opening_balance' => 0,
-            'opening_balance_type' => 'debit',
+            'opening_balance_type' => 'debit', // Expense account
             'current_balance' => 0,
             'is_active' => true,
         ]);
-    }
-    public static function getCashLedger($companyId)
-    {
-        return static::forCompany($companyId)
-            ->where('ledger_type', 'cash')
-            ->where('ledger_name', 'Cash in Hand')
-            ->first();
     }
 
     public static function getOrCreateCashLedger($companyId)
     {
-        $cashLedger = static::getCashLedger($companyId);
+        $cashLedger = static::forCompany($companyId)
+            ->where('ledger_type', 'cash')
+            ->where('ledger_name', 'Cash in Hand')
+            ->first();
 
         if (!$cashLedger) {
             $cashLedger = static::create([
@@ -203,7 +238,7 @@ class AccountLedger extends Model
                 'ledger_name' => 'Cash in Hand',
                 'ledger_type' => 'cash',
                 'opening_balance' => 0,
-                'opening_balance_type' => 'debit',
+                'opening_balance_type' => 'debit', // Asset account
                 'current_balance' => 0,
                 'is_active' => true,
             ]);
@@ -212,13 +247,121 @@ class AccountLedger extends Model
         return $cashLedger;
     }
 
-    // Analytics methods
-    public static function getTotalBalanceByType($companyId, $type)
+    public static function getOrCreateBankLedger($companyId, $paymentMethod)
     {
-        return static::forCompany($companyId)
-            ->byType($type)
-            ->active()
-            ->sum('current_balance');
+        $ledgerName = match ($paymentMethod) {
+            'bank_transfer' => 'Bank Account',
+            'upi' => 'UPI Payments',
+            'card' => 'Card Payments',
+            'cheque' => 'Cheque Payments',
+            default => 'Bank Account'
+        };
+
+        $bankLedger = static::forCompany($companyId)
+            ->where('ledger_type', 'bank')
+            ->where('ledger_name', $ledgerName)
+            ->first();
+
+        if (!$bankLedger) {
+            $bankLedger = static::create([
+                'company_profile_id' => $companyId,
+                'ledger_name' => $ledgerName,
+                'ledger_type' => 'bank',
+                'opening_balance' => 0,
+                'opening_balance_type' => 'debit', // Asset account
+                'current_balance' => 0,
+                'is_active' => true,
+            ]);
+        }
+
+        return $bankLedger;
+    }
+
+    public static function getOrCreateExpenseLedger($companyId, $category)
+    {
+        $expenseLedger = static::forCompany($companyId)
+            ->where('ledger_type', 'expenses')
+            ->where('ledgerable_type', get_class($category))
+            ->where('ledgerable_id', $category->id)
+            ->first();
+
+        if (!$expenseLedger) {
+            $expenseLedger = static::createForExpenseCategory($companyId, $category);
+        }
+
+        return $expenseLedger;
+    }
+
+    public static function getOrCreateClientLedger($companyId, $client)
+    {
+        $clientLedger = static::forCompany($companyId)
+            ->where('ledger_type', 'client')
+            ->where('ledgerable_type', get_class($client))
+            ->where('ledgerable_id', $client->id)
+            ->first();
+
+        if (!$clientLedger) {
+            $clientLedger = static::createForClient($companyId, $client);
+        }
+
+        return $clientLedger;
+    }
+
+    public static function getOrCreateIncomeLedger($companyId)
+    {
+        $incomeLedger = static::forCompany($companyId)
+            ->where('ledger_type', 'income')
+            ->where('ledger_name', 'Sales Revenue')
+            ->first();
+
+        if (!$incomeLedger) {
+            $incomeLedger = static::create([
+                'company_profile_id' => $companyId,
+                'ledger_name' => 'Sales Revenue',
+                'ledger_type' => 'income',
+                'opening_balance' => 0,
+                'opening_balance_type' => 'credit', // Income account
+                'current_balance' => 0,
+                'is_active' => true,
+            ]);
+        }
+
+        return $incomeLedger;
+    }
+
+    // Analytics methods for Profit/Loss tracking
+    public static function getTotalIncome($companyId, $startDate = null, $endDate = null)
+    {
+        $query = static::forCompany($companyId)->income()->active();
+
+        if ($startDate && $endDate) {
+            $query->whereHas('transactions', function ($transactionQuery) use ($startDate, $endDate) {
+                $transactionQuery->whereBetween('date', [$startDate, $endDate]);
+            });
+        }
+
+        return abs($query->sum('current_balance')); // Income should be positive for profit calculation
+    }
+
+    public static function getTotalExpenses($companyId, $startDate = null, $endDate = null)
+    {
+        $query = static::forCompany($companyId)->expenses()->active();
+
+        if ($startDate && $endDate) {
+            $query->whereHas('transactions', function ($transactionQuery) use ($startDate, $endDate) {
+                $transactionQuery->whereBetween('date', [$startDate, $endDate]);
+            });
+        }
+
+        return abs($query->sum('current_balance')); // Expenses should be positive for profit calculation
+    }
+
+    public static function getNetProfit($companyId, $startDate = null, $endDate = null)
+    {
+        $income = static::getTotalIncome($companyId, $startDate, $endDate);
+        $expenses = static::getTotalExpenses($companyId, $startDate, $endDate);
+
+        return $income - $expenses;
     }
 
     public static function getEmployeeBalances($companyId)
@@ -253,66 +396,6 @@ class AccountLedger extends Model
             });
     }
 
-    public static function createForExpenseCategory($companyId, $category)
-    {
-        return static::create([
-            'company_profile_id' => $companyId,
-            'ledger_name' => $category->name . ' Expenses',
-            'ledger_type' => 'expenses',
-            'ledgerable_id' => $category->id,
-            'ledgerable_type' => get_class($category),
-            'opening_balance' => 0,
-            'opening_balance_type' => 'debit',
-            'current_balance' => 0,
-            'is_active' => true,
-        ]);
-    }
-
-    public static function getOrCreateExpenseLedger($companyId, $category)
-    {
-        $expenseLedger = static::forCompany($companyId)
-            ->where('ledger_type', 'expenses')
-            ->where('ledgerable_type', get_class($category))
-            ->where('ledgerable_id', $category->id)
-            ->first();
-
-        if (!$expenseLedger) {
-            $expenseLedger = static::createForExpenseCategory($companyId, $category);
-        }
-
-        return $expenseLedger;
-    }
-
-    public static function getOrCreateBankLedger($companyId, $paymentMethod)
-    {
-        $ledgerName = match ($paymentMethod) {
-            'bank' => 'Bank Account',
-            'upi' => 'UPI Payments',
-            'card' => 'Card Payments',
-            'cheque' => 'Cheque Payments',
-            default => 'Bank Account'
-        };
-
-        $bankLedger = static::forCompany($companyId)
-            ->where('ledger_type', 'bank')
-            ->where('ledger_name', $ledgerName)
-            ->first();
-
-        if (!$bankLedger) {
-            $bankLedger = static::create([
-                'company_profile_id' => $companyId,
-                'ledger_name' => $ledgerName,
-                'ledger_type' => 'bank',
-                'opening_balance' => 0,
-                'opening_balance_type' => 'debit',
-                'current_balance' => 0,
-                'is_active' => true,
-            ]);
-        }
-
-        return $bankLedger;
-    }
-
     public static function getExpenseBalances($companyId)
     {
         return static::forCompany($companyId)
@@ -344,40 +427,12 @@ class AccountLedger extends Model
             });
     }
 
-    public static function getOrCreateClientLedger($companyId, $client)
+    // Additional analytics methods
+    public static function getTotalBalanceByType($companyId, $type)
     {
-        $clientLedger = static::forCompany($companyId)
-            ->where('ledger_type', 'client')
-            ->where('ledgerable_type', get_class($client))
-            ->where('ledgerable_id', $client->id)
-            ->first();
-
-        if (!$clientLedger) {
-            $clientLedger = static::createForClient($companyId, $client);
-        }
-
-        return $clientLedger;
-    }
-
-    public static function getOrCreateIncomeLedger($companyId)
-    {
-        $incomeLedger = static::forCompany($companyId)
-            ->where('ledger_type', 'income')
-            ->where('ledger_name', 'Sales Revenue')
-            ->first();
-
-        if (!$incomeLedger) {
-            $incomeLedger = static::create([
-                'company_profile_id' => $companyId,
-                'ledger_name' => 'Sales Revenue',
-                'ledger_type' => 'income',
-                'opening_balance' => 0,
-                'opening_balance_type' => 'credit',
-                'current_balance' => 0,
-                'is_active' => true,
-            ]);
-        }
-
-        return $incomeLedger;
+        return static::forCompany($companyId)
+            ->byType($type)
+            ->active()
+            ->sum('current_balance');
     }
 }

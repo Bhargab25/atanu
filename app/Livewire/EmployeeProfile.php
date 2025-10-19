@@ -34,7 +34,7 @@ class EmployeeProfile extends Component
 
     // Add payment type property
     public $payment_type = 'salary';
-    
+
     // Add payment type options
     public $paymentTypes = [
         ['value' => 'salary', 'label' => 'Regular Salary'],
@@ -105,16 +105,16 @@ class EmployeeProfile extends Component
             return;
         }
 
-         try {
+        try {
             DB::transaction(function () {
-                // Create employee payment with payment type
+                // Create employee payment record
                 $payment = EmployeePayment::create([
                     'employee_id' => $this->employee->id,
                     'payment_id' => EmployeePayment::generatePaymentId(),
                     'amount' => $this->amount,
                     'payment_date' => $this->payment_date,
                     'payment_method' => $this->payment_method,
-                    'payment_type' => $this->payment_type, // Add this
+                    'payment_type' => $this->payment_type,
                     'reference_number' => $this->reference_number,
                     'notes' => $this->payment_notes,
                     'month_year' => $this->month_year,
@@ -122,29 +122,34 @@ class EmployeeProfile extends Component
                     'created_by' => auth()->id(),
                 ]);
 
-                // Create ledger transaction for employee (Credit - we owe them less)
+                // Create proper accounting entries for profit/loss tracking
+
+                // 1. DEBIT: Salary/Employee Expense Account (Business Expense)
+                $expenseLedger = $this->getOrCreateSalaryExpenseLedger();
                 LedgerTransaction::create([
                     'company_profile_id' => $this->employee->company_profile_id,
-                    'ledger_id' => $this->employeeLedger->id,
+                    'ledger_id' => $expenseLedger->id,
                     'date' => $this->payment_date,
-                    'type' => 'payment',
-                    'description' => "Salary payment for {$this->month_year} - {$this->employee->name}",
-                    'debit_amount' => $this->amount, // Employee receives money (we pay them)
+                    'type' => 'expense',
+                    'description' => ucfirst($this->payment_type) . " expense for {$this->month_year} - {$this->employee->name}",
+                    'debit_amount' => $this->amount, // Increases expense (reduces profit)
                     'credit_amount' => 0,
                     'reference' => $payment->payment_id,
                 ]);
 
-                // Get or create cash ledger and create corresponding entry
-                $cashLedger = AccountLedger::getOrCreateCashLedger($this->employee->company_profile_id);
+                // 2. CREDIT: Cash/Bank Account (Asset Decrease)
+                $paymentLedger = $this->payment_method === 'cash'
+                    ? AccountLedger::getOrCreateCashLedger($this->employee->company_profile_id)
+                    : AccountLedger::getOrCreateBankLedger($this->employee->company_profile_id, $this->payment_method);
 
                 LedgerTransaction::create([
                     'company_profile_id' => $this->employee->company_profile_id,
-                    'ledger_id' => $cashLedger->id,
+                    'ledger_id' => $paymentLedger->id,
                     'date' => $this->payment_date,
                     'type' => 'payment',
-                    'description' => ucfirst($this->payment_type) . " payment for {$this->month_year} - {$this->employee->name}",
+                    'description' => ucfirst($this->payment_type) . " payment to {$this->employee->name}",
                     'debit_amount' => 0,
-                    'credit_amount' => $this->amount, // Cash goes out
+                    'credit_amount' => $this->amount, // Decreases cash/bank balance
                     'reference' => $payment->payment_id,
                 ]);
 
@@ -156,14 +161,15 @@ class EmployeeProfile extends Component
                     Log::error('Failed to generate payment receipt: ' . $e->getMessage());
                 }
 
-                $this->success('Payment Processed!', 'Salary payment has been recorded in ledger successfully.');
+                $this->success(
+                    'Payment Processed!',
+                    ucfirst($this->payment_type) . ' payment recorded successfully. Expense: +₹' . number_format($this->amount, 2)
+                );
             });
 
             $this->showPaymentModal = false;
             $this->resetPaymentForm();
             $this->dispatch('refreshProfile');
-
-            // Refresh ledger data
             $this->employeeLedger->refresh();
         } catch (\Exception $e) {
             Log::error('Error processing employee payment: ' . $e->getMessage());
@@ -171,12 +177,45 @@ class EmployeeProfile extends Component
         }
     }
 
+    // NEW: Method to get or create salary expense ledger
+    private function getOrCreateSalaryExpenseLedger()
+    {
+        $ledgerName = match ($this->payment_type) {
+            'salary' => 'Salary Expenses',
+            'bonus' => 'Bonus Expenses',
+            'advance' => 'Employee Advances',
+            'overtime' => 'Overtime Expenses',
+            'allowance' => 'Allowance Expenses',
+            'adjustment' => 'Payroll Adjustments',
+            default => 'Employee Expenses'
+        };
+
+        $expenseLedger = AccountLedger::forCompany($this->employee->company_profile_id)
+            ->where('ledger_type', 'expenses')
+            ->where('ledger_name', $ledgerName)
+            ->first();
+
+        if (!$expenseLedger) {
+            $expenseLedger = AccountLedger::create([
+                'company_profile_id' => $this->employee->company_profile_id,
+                'ledger_name' => $ledgerName,
+                'ledger_type' => 'expenses',
+                'opening_balance' => 0,
+                'opening_balance_type' => 'debit', // Expense account
+                'current_balance' => 0,
+                'is_active' => true,
+            ]);
+        }
+
+        return $expenseLedger;
+    }
+
     public function resetPaymentForm()
     {
         $this->amount = $this->employee->salary_amount;
         $this->payment_date = now()->format('Y-m-d');
         $this->payment_method = 'cash';
-        $this->payment_type = 'salary'; // Reset to default
+        $this->payment_type = 'salary';
         $this->month_year = now()->format('Y-m');
         $this->reference_number = '';
         $this->payment_notes = '';

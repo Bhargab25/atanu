@@ -91,7 +91,7 @@ class Invoice extends Model
     public function scopeOverdue($query)
     {
         return $query->where('due_date', '<', now())
-                    ->where('payment_status', '!=', 'paid');
+            ->where('payment_status', '!=', 'paid');
     }
 
     public function scopeForDateRange($query, $startDate, $endDate)
@@ -187,8 +187,9 @@ class Invoice extends Model
 
             $attempts = 0;
             while (static::where('company_profile_id', $companyId)
-                        ->where('invoice_number', $invoiceNumber)
-                        ->exists() && $attempts < 10) {
+                ->where('invoice_number', $invoiceNumber)
+                ->exists() && $attempts < 10
+            ) {
                 $newNumber++;
                 $invoiceNumber = "$prefix-$year$month$date-" . str_pad($newNumber, 4, '0', STR_PAD_LEFT);
                 $attempts++;
@@ -362,4 +363,5 @@ class Invoice extends Model
             ]);
         }
     }
+    
 }

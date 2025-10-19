@@ -13,6 +13,8 @@ use App\Models\EmployeePayment;
 use App\Models\Client;
 use App\Models\Employee;
 use App\Models\ExpenseCategory;
+use App\Models\Invoice;
+use App\Models\InvoicePayment;
 use Carbon\Carbon;
 use Illuminate\Support\Facades\DB;
 
@@ -62,7 +64,7 @@ class FinancialReports extends Component
     // Report data
     public $reportData = [];
     public $chartData = [];
-    
+
     // Pagination
     public $perPage = 20;
 
@@ -72,12 +74,12 @@ class FinancialReports extends Component
     {
         $this->loadCompanies();
         $this->setPeriodDates();
-        
+
         // Set default company if only one exists
         if (count($this->companyOptions) === 1) {
             $this->selectedCompanyId = $this->companyOptions[0]['id'];
         }
-        
+
         $this->generateReport();
     }
 
@@ -121,7 +123,7 @@ class FinancialReports extends Component
     private function setPeriodDates()
     {
         $now = Carbon::now();
-        
+
         switch ($this->period) {
             case 'today':
                 $this->dateFrom = $now->format('Y-m-d');
@@ -129,31 +131,34 @@ class FinancialReports extends Component
                 break;
             case 'this_week':
                 $this->dateFrom = $now->startOfWeek()->format('Y-m-d');
-                $this->dateTo = $now->endOfWeek()->format('Y-m-d');
+                $this->dateTo = $now->copy()->endOfWeek()->format('Y-m-d');
                 break;
             case 'this_month':
                 $this->dateFrom = $now->startOfMonth()->format('Y-m-d');
-                $this->dateTo = $now->endOfMonth()->format('Y-m-d');
+                $this->dateTo = $now->copy()->endOfMonth()->format('Y-m-d');
                 break;
             case 'this_quarter':
                 $this->dateFrom = $now->startOfQuarter()->format('Y-m-d');
-                $this->dateTo = $now->endOfQuarter()->format('Y-m-d');
+                $this->dateTo = $now->copy()->endOfQuarter()->format('Y-m-d');
                 break;
             case 'this_year':
                 $this->dateFrom = $now->startOfYear()->format('Y-m-d');
-                $this->dateTo = $now->endOfYear()->format('Y-m-d');
+                $this->dateTo = $now->copy()->endOfYear()->format('Y-m-d');
                 break;
             case 'last_month':
-                $this->dateFrom = $now->subMonth()->startOfMonth()->format('Y-m-d');
-                $this->dateTo = $now->endOfMonth()->format('Y-m-d');
+                $lastMonth = $now->copy()->subMonth();
+                $this->dateFrom = $lastMonth->startOfMonth()->format('Y-m-d');
+                $this->dateTo = $lastMonth->endOfMonth()->format('Y-m-d');
                 break;
             case 'last_quarter':
-                $this->dateFrom = $now->subQuarter()->startOfQuarter()->format('Y-m-d');
-                $this->dateTo = $now->endOfQuarter()->format('Y-m-d');
+                $lastQuarter = $now->copy()->subQuarter();
+                $this->dateFrom = $lastQuarter->startOfQuarter()->format('Y-m-d');
+                $this->dateTo = $lastQuarter->endOfQuarter()->format('Y-m-d');
                 break;
             case 'last_year':
-                $this->dateFrom = $now->subYear()->startOfYear()->format('Y-m-d');
-                $this->dateTo = $now->endOfYear()->format('Y-m-d');
+                $lastYear = $now->copy()->subYear();
+                $this->dateFrom = $lastYear->startOfYear()->format('Y-m-d');
+                $this->dateTo = $lastYear->endOfYear()->format('Y-m-d');
                 break;
             default:
                 // Custom range - don't change dates
@@ -196,179 +201,220 @@ class FinancialReports extends Component
         }
     }
 
+    // FIXED: Comprehensive financial summary using ledger system
     private function generateFinancialSummary()
     {
         $companyId = $this->selectedCompanyId;
-        
-        // Total Income (Client payments, etc.)
-        $totalIncome = 0; // You can add client payment logic here
-        
-        // Total Expenses
-        $totalExpenses = Expense::forCompany($companyId)
+
+        // FIXED: Get income from ledger (invoices/sales revenue)
+        $totalIncome = AccountLedger::getTotalIncome($companyId, $this->dateFrom, $this->dateTo);
+
+        // FIXED: Get expenses from ledger system
+        $totalExpenses = AccountLedger::getTotalExpenses($companyId, $this->dateFrom, $this->dateTo);
+
+        // FIXED: Get employee payments from ledger
+        $employeePayments = LedgerTransaction::forCompany($companyId)
             ->forDateRange($this->dateFrom, $this->dateTo)
-            ->approved()
-            ->sum('amount');
-        
-        // Employee Payments
-        $employeePayments = EmployeePayment::whereHas('employee', function ($query) use ($companyId) {
-            $query->where('company_profile_id', $companyId);
-        })
-        ->whereBetween('payment_date', [$this->dateFrom, $this->dateTo])
-        ->where('status', 'paid')
-        ->sum('amount');
-        
-        // Cash Balance
+            ->where('type', 'expense')
+            ->whereHas('ledger', function ($query) {
+                $query->where('ledger_type', 'expenses')
+                    ->where('ledger_name', 'LIKE', '%salary%');
+            })
+            ->sum('debit_amount');
+
+        // Current balances
         $cashBalance = AccountLedger::forCompany($companyId)
-            ->cashAccounts()
+            ->where('ledger_type', 'cash')
             ->sum('current_balance');
-        
-        // Bank Balance
+
         $bankBalance = AccountLedger::forCompany($companyId)
             ->where('ledger_type', 'bank')
             ->sum('current_balance');
-        
-        // Outstanding Client Balances
-        $clientBalances = AccountLedger::forCompany($companyId)
-            ->clients()
+
+        // Client receivables (positive balances = they owe us)
+        $clientReceivables = AccountLedger::forCompany($companyId)
+            ->where('ledger_type', 'client')
+            ->where('current_balance', '>', 0)
             ->sum('current_balance');
-        
-        // Outstanding Employee Balances
-        $employeeBalances = AccountLedger::forCompany($companyId)
-            ->employees()
+
+        // Employee liabilities (positive balances = we owe them)
+        $employeeLiabilities = AccountLedger::forCompany($companyId)
+            ->where('ledger_type', 'employee')
+            ->where('current_balance', '>', 0)
             ->sum('current_balance');
-        
-        // Expense by Category
-        $expensesByCategory = Expense::forCompany($companyId)
-            ->forDateRange($this->dateFrom, $this->dateTo)
-            ->approved()
-            ->with('category')
+
+        // FIXED: Expenses by category from ledger
+        $expensesByCategory = AccountLedger::forCompany($companyId)
+            ->where('ledger_type', 'expenses')
+            ->whereHas('transactions', function ($query) {
+                $query->whereBetween('date', [$this->dateFrom, $this->dateTo]);
+            })
+            ->with(['transactions' => function ($query) {
+                $query->whereBetween('date', [$this->dateFrom, $this->dateTo])
+                    ->where('type', 'expense');
+            }])
             ->get()
-            ->groupBy('category.name')
-            ->map(function ($expenses) {
+            ->mapWithKeys(function ($ledger) {
                 return [
-                    'total' => $expenses->sum('amount'),
-                    'count' => $expenses->count(),
+                    $ledger->ledger_name => [
+                        'total' => $ledger->transactions->sum('debit_amount'),
+                        'count' => $ledger->transactions->count(),
+                    ]
                 ];
             });
-        
-        // Monthly Trends (last 6 months)
+
+        // FIXED: Monthly trends using ledger data
         $monthlyTrends = [];
         for ($i = 5; $i >= 0; $i--) {
             $month = Carbon::now()->subMonths($i);
-            $monthStart = $month->copy()->startOfMonth();
-            $monthEnd = $month->copy()->endOfMonth();
-            
-            $monthlyExpenses = Expense::forCompany($companyId)
-                ->forDateRange($monthStart->format('Y-m-d'), $monthEnd->format('Y-m-d'))
-                ->approved()
-                ->sum('amount');
-            
-            $monthlyPayments = EmployeePayment::whereHas('employee', function ($query) use ($companyId) {
-                $query->where('company_profile_id', $companyId);
-            })
-            ->whereBetween('payment_date', [$monthStart->format('Y-m-d'), $monthEnd->format('Y-m-d')])
-            ->where('status', 'paid')
-            ->sum('amount');
-            
+            $monthStart = $month->copy()->startOfMonth()->format('Y-m-d');
+            $monthEnd = $month->copy()->endOfMonth()->format('Y-m-d');
+
+            $monthlyIncome = AccountLedger::getTotalIncome($companyId, $monthStart, $monthEnd);
+            $monthlyExpenses = AccountLedger::getTotalExpenses($companyId, $monthStart, $monthEnd);
+
             $monthlyTrends[] = [
                 'month' => $month->format('M Y'),
+                'income' => $monthlyIncome,
                 'expenses' => $monthlyExpenses,
-                'employee_payments' => $monthlyPayments,
-                'total_outflow' => $monthlyExpenses + $monthlyPayments,
+                'net_profit' => $monthlyIncome - $monthlyExpenses,
             ];
         }
-        
+
         return [
             'summary' => [
                 'total_income' => $totalIncome,
                 'total_expenses' => $totalExpenses,
                 'employee_payments' => $employeePayments,
-                'net_profit' => $totalIncome - $totalExpenses - $employeePayments,
+                'net_profit' => AccountLedger::getNetProfit($companyId, $this->dateFrom, $this->dateTo),
                 'cash_balance' => $cashBalance,
                 'bank_balance' => $bankBalance,
                 'total_available' => $cashBalance + $bankBalance,
-                'client_balances' => $clientBalances,
-                'employee_balances' => $employeeBalances,
+                'client_receivables' => $clientReceivables,
+                'employee_liabilities' => $employeeLiabilities,
             ],
             'expenses_by_category' => $expensesByCategory,
             'monthly_trends' => $monthlyTrends,
         ];
     }
 
+    // FIXED: Profit & Loss using proper accounting principles
     private function generateProfitLoss()
     {
         $companyId = $this->selectedCompanyId;
-        
-        // Revenue (you can extend this based on your business model)
+
+        // FIXED: Revenue from income ledger accounts
+        $totalRevenue = AccountLedger::getTotalIncome($companyId, $this->dateFrom, $this->dateTo);
+
+        // Revenue breakdown
         $revenue = [
-            'total' => 0, // Add your revenue sources here
+            'sales_revenue' => $totalRevenue,
+            'other_income' => 0, // You can add other income sources
+            'total' => $totalRevenue,
         ];
-        
-        // Expenses by Category
-        $expenses = Expense::forCompany($companyId)
-            ->forDateRange($this->dateFrom, $this->dateTo)
-            ->approved()
-            ->with('category')
-            ->get()
-            ->groupBy('category.name')
-            ->map(function ($categoryExpenses) {
-                return $categoryExpenses->sum('amount');
-            });
-        
-        // Employee Costs
-        $employeeCosts = EmployeePayment::whereHas('employee', function ($query) use ($companyId) {
-            $query->where('company_profile_id', $companyId);
-        })
-        ->whereBetween('payment_date', [$this->dateFrom, $this->dateTo])
-        ->where('status', 'paid')
-        ->sum('amount');
-        
-        $totalExpenses = $expenses->sum() + $employeeCosts;
-        $grossProfit = $revenue['total'] - $totalExpenses;
-        
+
+        // FIXED: Operating expenses from expense ledger accounts
+        $expenseLedgers = AccountLedger::forCompany($companyId)
+            ->where('ledger_type', 'expenses')
+            ->whereHas('transactions', function ($query) {
+                $query->whereBetween('date', [$this->dateFrom, $this->dateTo])
+                    ->where('type', 'expense');
+            })
+            ->with(['transactions' => function ($query) {
+                $query->whereBetween('date', [$this->dateFrom, $this->dateTo])
+                    ->where('type', 'expense');
+            }])
+            ->get();
+
+        $expenses = $expenseLedgers->mapWithKeys(function ($ledger) {
+            return [$ledger->ledger_name => $ledger->transactions->sum('debit_amount')];
+        });
+
+        $totalOperatingExpenses = $expenses->sum();
+
+        // Calculate profit margins
+        $grossProfit = $revenue['total'] - $totalOperatingExpenses;
+        $netProfit = $grossProfit; // Add taxes, interest if applicable
+
+        // Profit margins
+        $grossProfitMargin = $revenue['total'] > 0 ? ($grossProfit / $revenue['total']) * 100 : 0;
+        $netProfitMargin = $revenue['total'] > 0 ? ($netProfit / $revenue['total']) * 100 : 0;
+
         return [
             'revenue' => $revenue,
             'expenses' => $expenses,
-            'employee_costs' => $employeeCosts,
-            'total_expenses' => $totalExpenses,
+            'total_operating_expenses' => $totalOperatingExpenses,
             'gross_profit' => $grossProfit,
+            'net_profit' => $netProfit,
+            'gross_profit_margin' => round($grossProfitMargin, 2),
+            'net_profit_margin' => round($netProfitMargin, 2),
         ];
     }
 
+    // FIXED: Balance Sheet using proper accounting equation
     private function generateBalanceSheet()
     {
         $companyId = $this->selectedCompanyId;
-        
-        // Assets
+
+        // ASSETS
+        $cashAccounts = AccountLedger::forCompany($companyId)
+            ->where('ledger_type', 'cash')
+            ->sum('current_balance');
+
+        $bankAccounts = AccountLedger::forCompany($companyId)
+            ->where('ledger_type', 'bank')
+            ->sum('current_balance');
+
+        // Accounts Receivable (clients owe us - positive balances)
+        $accountsReceivable = AccountLedger::forCompany($companyId)
+            ->where('ledger_type', 'client')
+            ->where('current_balance', '>', 0)
+            ->sum('current_balance');
+
+        $currentAssets = $cashAccounts + $bankAccounts + $accountsReceivable;
+
         $assets = [
             'current_assets' => [
-                'cash' => AccountLedger::forCompany($companyId)->cashAccounts()->sum('current_balance'),
-                'bank' => AccountLedger::forCompany($companyId)->where('ledger_type', 'bank')->sum('current_balance'),
-                'accounts_receivable' => AccountLedger::forCompany($companyId)->clients()->sum('current_balance'),
+                'cash' => $cashAccounts,
+                'bank' => $bankAccounts,
+                'accounts_receivable' => $accountsReceivable,
+                'total' => $currentAssets,
             ],
+            'total' => $currentAssets,
         ];
-        
-        $assets['current_assets']['total'] = array_sum($assets['current_assets']);
-        $assets['total'] = $assets['current_assets']['total'];
-        
-        // Liabilities
+
+        // LIABILITIES
+        // Accounts Payable (we owe clients - negative client balances)
+        $accountsPayable = abs(AccountLedger::forCompany($companyId)
+            ->where('ledger_type', 'client')
+            ->where('current_balance', '<', 0)
+            ->sum('current_balance'));
+
+        // Employee Liabilities (we owe employees - positive employee balances)
+        $employeePayables = AccountLedger::forCompany($companyId)
+            ->where('ledger_type', 'employee')
+            ->where('current_balance', '>', 0)
+            ->sum('current_balance');
+
+        $currentLiabilities = $accountsPayable + $employeePayables;
+
         $liabilities = [
             'current_liabilities' => [
-                'accounts_payable' => AccountLedger::forCompany($companyId)->employees()->where('current_balance', '<', 0)->sum('current_balance'),
-                'accrued_expenses' => 0, // You can add more liability types
+                'accounts_payable' => $accountsPayable,
+                'employee_payables' => $employeePayables,
+                'total' => $currentLiabilities,
             ],
+            'total' => $currentLiabilities,
         ];
-        
-        $liabilities['current_liabilities']['total'] = array_sum($liabilities['current_liabilities']);
-        $liabilities['total'] = $liabilities['current_liabilities']['total'];
-        
-        // Equity
+
+        // EQUITY (Assets - Liabilities)
+        $retainedEarnings = $assets['total'] - $liabilities['total'];
+
         $equity = [
-            'retained_earnings' => $assets['total'] - abs($liabilities['total']),
+            'retained_earnings' => $retainedEarnings,
+            'total' => $retainedEarnings,
         ];
-        
-        $equity['total'] = $equity['retained_earnings'];
-        
+
         return [
             'assets' => $assets,
             'liabilities' => $liabilities,
@@ -376,11 +422,12 @@ class FinancialReports extends Component
         ];
     }
 
+    // FIXED: Cash Flow using ledger transactions
     private function generateCashFlow()
     {
         $companyId = $this->selectedCompanyId;
-        
-        // Cash transactions
+
+        // Get all cash and bank transactions
         $cashTransactions = LedgerTransaction::forCompany($companyId)
             ->forDateRange($this->dateFrom, $this->dateTo)
             ->whereHas('ledger', function ($query) {
@@ -389,148 +436,255 @@ class FinancialReports extends Component
             ->with('ledger')
             ->orderBy('date', 'desc')
             ->get();
-        
-        $cashInflows = $cashTransactions->where('debit_amount', '>', 0)->sum('debit_amount');
-        $cashOutflows = $cashTransactions->where('credit_amount', '>', 0)->sum('credit_amount');
-        $netCashFlow = $cashInflows - $cashOutflows;
-        
+
+        // Operating cash flows
+        $operatingInflows = $cashTransactions
+            ->where('debit_amount', '>', 0)
+            ->where('type', 'receipt')
+            ->sum('debit_amount');
+
+        $operatingOutflows = $cashTransactions
+            ->where('credit_amount', '>', 0)
+            ->whereIn('type', ['expense', 'payment'])
+            ->sum('credit_amount');
+
+        $netOperatingCashFlow = $operatingInflows - $operatingOutflows;
+
         // Opening and closing balances
         $openingBalance = AccountLedger::forCompany($companyId)
             ->whereIn('ledger_type', ['cash', 'bank'])
             ->sum('opening_balance');
-        
+
         $closingBalance = AccountLedger::forCompany($companyId)
             ->whereIn('ledger_type', ['cash', 'bank'])
             ->sum('current_balance');
-        
+
+        // Group transactions by type for better reporting
+        $transactionsByType = $cashTransactions->groupBy('type')
+            ->map(function ($typeTransactions, $type) {
+                return [
+                    'inflows' => $typeTransactions->sum('debit_amount'),
+                    'outflows' => $typeTransactions->sum('credit_amount'),
+                    'count' => $typeTransactions->count(),
+                ];
+            });
+
         return [
-            'cash_inflows' => $cashInflows,
-            'cash_outflows' => $cashOutflows,
-            'net_cash_flow' => $netCashFlow,
+            'operating_cash_flows' => [
+                'inflows' => $operatingInflows,
+                'outflows' => $operatingOutflows,
+                'net' => $netOperatingCashFlow,
+            ],
             'opening_balance' => $openingBalance,
             'closing_balance' => $closingBalance,
+            'net_change' => $closingBalance - $openingBalance,
             'transactions' => $cashTransactions,
+            'transactions_by_type' => $transactionsByType,
         ];
     }
 
+    // FIXED: Enhanced expense report
     private function generateExpenseReport()
     {
-        $query = Expense::forCompany($this->selectedCompanyId)
-            ->forDateRange($this->dateFrom, $this->dateTo)
+        $companyId = $this->selectedCompanyId;
+
+        $query = Expense::where('company_profile_id', $companyId)
+            ->whereBetween('expense_date', [$this->dateFrom, $this->dateTo])
             ->with(['category', 'creator', 'company']);
-        
+
         if ($this->categoryFilter) {
             $query->where('category_id', $this->categoryFilter);
         }
-        
+
         if ($this->statusFilter) {
             $query->where('approval_status', $this->statusFilter);
         }
-        
+
         $expenses = $query->orderBy('expense_date', 'desc')->get();
-        
-        // Summary by category
+
+        // FIXED: Category breakdown with percentage
         $categoryBreakdown = $expenses->groupBy('category.name')
-            ->map(function ($categoryExpenses) {
+            ->map(function ($categoryExpenses, $categoryName) use ($expenses) {
+                $total = $categoryExpenses->sum('amount');
+                $grandTotal = $expenses->sum('amount');
+
                 return [
-                    'total' => $categoryExpenses->sum('amount'),
+                    'total' => $total,
                     'count' => $categoryExpenses->count(),
                     'avg' => $categoryExpenses->avg('amount'),
+                    'percentage' => $grandTotal > 0 ? round(($total / $grandTotal) * 100, 2) : 0,
                 ];
             });
-        
+
+        // Monthly trend
+        $monthlyBreakdown = $expenses->groupBy(function ($expense) {
+            return $expense->expense_date->format('Y-m');
+        })->map(function ($monthExpenses) {
+            return [
+                'total' => $monthExpenses->sum('amount'),
+                'count' => $monthExpenses->count(),
+            ];
+        });
+
         return [
             'expenses' => $expenses,
             'category_breakdown' => $categoryBreakdown,
+            'monthly_breakdown' => $monthlyBreakdown,
             'total_amount' => $expenses->sum('amount'),
             'total_count' => $expenses->count(),
+            'average_expense' => $expenses->count() > 0 ? $expenses->avg('amount') : 0,
         ];
     }
 
+    // FIXED: Enhanced employee report
     private function generateEmployeeReport()
     {
-        $query = EmployeePayment::whereHas('employee', function ($q) {
-            $q->where('company_profile_id', $this->selectedCompanyId);
+        $companyId = $this->selectedCompanyId;
+
+        $query = EmployeePayment::whereHas('employee', function ($q) use ($companyId) {
+            $q->where('company_profile_id', $companyId);
         })
-        ->whereBetween('payment_date', [$this->dateFrom, $this->dateTo])
-        ->with(['employee', 'creator']);
-        
+            ->whereBetween('payment_date', [$this->dateFrom, $this->dateTo])
+            ->with(['employee', 'creator']);
+
         if ($this->employeeFilter) {
             $query->where('employee_id', $this->employeeFilter);
         }
-        
+
         if ($this->statusFilter) {
             $query->where('status', $this->statusFilter);
         }
-        
+
         $payments = $query->orderBy('payment_date', 'desc')->get();
-        
-        // Summary by employee
+
+        // FIXED: Employee breakdown with payment types
         $employeeBreakdown = $payments->groupBy('employee.name')
             ->map(function ($employeePayments) {
+                $paymentTypes = $employeePayments->groupBy('payment_type')
+                    ->map(function ($typePayments) {
+                        return [
+                            'total' => $typePayments->sum('amount'),
+                            'count' => $typePayments->count(),
+                        ];
+                    });
+
                 return [
                     'total' => $employeePayments->sum('amount'),
                     'count' => $employeePayments->count(),
                     'avg' => $employeePayments->avg('amount'),
+                    'by_type' => $paymentTypes,
                 ];
             });
-        
+
         return [
             'payments' => $payments,
             'employee_breakdown' => $employeeBreakdown,
             'total_amount' => $payments->sum('amount'),
             'total_count' => $payments->count(),
+            'average_payment' => $payments->count() > 0 ? $payments->avg('amount') : 0,
         ];
     }
 
+    // FIXED: Enhanced client report with invoice data
     private function generateClientReport()
     {
-        $clients = Client::where('company_profile_id', $this->selectedCompanyId)
+        $companyId = $this->selectedCompanyId;
+
+        $clients = Client::where('company_profile_id', $companyId)
             ->with(['company'])
+            ->withCount(['invoices'])
+            ->withSum(['invoices'], 'total_amount')
+            ->withSum(['invoices'], 'paid_amount')
             ->get();
-        
-        // Client balances from ledger
-        $clientLedgers = AccountLedger::forCompany($this->selectedCompanyId)
-            ->clients()
+
+        // Client ledger balances
+        $clientLedgers = AccountLedger::forCompany($companyId)
+            ->where('ledger_type', 'client')
             ->with('ledgerable')
             ->get();
-        
+
+        // Client payment history in date range
+        $clientPayments = InvoicePayment::whereHas('invoice', function ($query) use ($companyId) {
+            $query->where('company_profile_id', $companyId);
+        })
+            ->whereBetween('payment_date', [$this->dateFrom, $this->dateTo])
+            ->with(['invoice.client'])
+            ->get()
+            ->groupBy('invoice.client.name')
+            ->map(function ($payments) {
+                return [
+                    'total_paid' => $payments->sum('amount'),
+                    'payment_count' => $payments->count(),
+                ];
+            });
+
         return [
             'clients' => $clients,
             'client_ledgers' => $clientLedgers,
-            'total_receivables' => $clientLedgers->sum('current_balance'),
+            'client_payments' => $clientPayments,
+            'total_receivables' => $clientLedgers->where('current_balance', '>', 0)->sum('current_balance'),
+            'total_clients' => $clients->count(),
         ];
     }
 
+    // FIXED: Enhanced ledger report
     private function generateLedgerReport()
     {
-        $query = LedgerTransaction::forCompany($this->selectedCompanyId)
+        $companyId = $this->selectedCompanyId;
+
+        $query = LedgerTransaction::forCompany($companyId)
             ->forDateRange($this->dateFrom, $this->dateTo)
             ->with(['ledger', 'company']);
-        
+
         if ($this->ledgerTypeFilter) {
             $query->whereHas('ledger', function ($q) {
                 $q->where('ledger_type', $this->ledgerTypeFilter);
             });
         }
-        
+
         $transactions = $query->orderBy('date', 'desc')->get();
-        
-        // Summary by ledger type
+
+        // FIXED: Comprehensive breakdown by ledger type and transaction type
         $ledgerBreakdown = $transactions->groupBy('ledger.ledger_type')
             ->map(function ($typeTransactions) {
+                $byTransactionType = $typeTransactions->groupBy('type')
+                    ->map(function ($transTypeTransactions) {
+                        return [
+                            'total_debits' => $transTypeTransactions->sum('debit_amount'),
+                            'total_credits' => $transTypeTransactions->sum('credit_amount'),
+                            'count' => $transTypeTransactions->count(),
+                        ];
+                    });
+
                 return [
                     'total_debits' => $typeTransactions->sum('debit_amount'),
                     'total_credits' => $typeTransactions->sum('credit_amount'),
                     'count' => $typeTransactions->count(),
+                    'by_transaction_type' => $byTransactionType,
                 ];
             });
-        
+
+        // Trial balance
+        $trialBalance = AccountLedger::forCompany($companyId)
+            ->where('current_balance', '!=', 0)
+            ->get()
+            ->map(function ($ledger) {
+                return [
+                    'ledger_name' => $ledger->ledger_name,
+                    'ledger_type' => $ledger->ledger_type,
+                    'debit_balance' => $ledger->current_balance >= 0 ? $ledger->current_balance : 0,
+                    'credit_balance' => $ledger->current_balance < 0 ? abs($ledger->current_balance) : 0,
+                ];
+            });
+
         return [
             'transactions' => $transactions,
             'ledger_breakdown' => $ledgerBreakdown,
+            'trial_balance' => $trialBalance,
             'total_debits' => $transactions->sum('debit_amount'),
             'total_credits' => $transactions->sum('credit_amount'),
+            'total_trial_debits' => $trialBalance->sum('debit_balance'),
+            'total_trial_credits' => $trialBalance->sum('credit_balance'),
         ];
     }
 
@@ -543,9 +697,19 @@ class FinancialReports extends Component
     public function render()
     {
         // Get filter options
-        $expenseCategories = ExpenseCategory::forCompany($this->selectedCompanyId)->active()->get();
-        $employees = Employee::where('company_profile_id', $this->selectedCompanyId)->active()->get();
-        
+        $expenseCategories = [];
+        $employees = [];
+
+        if ($this->selectedCompanyId) {
+            $expenseCategories = ExpenseCategory::where('company_profile_id', $this->selectedCompanyId)
+                ->where('is_active', true)
+                ->get();
+
+            $employees = Employee::where('company_profile_id', $this->selectedCompanyId)
+                ->where('is_active', true)
+                ->get();
+        }
+
         return view('livewire.financial-reports', [
             'expenseCategories' => $expenseCategories,
             'employees' => $employees,

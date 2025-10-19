@@ -11,6 +11,7 @@ use App\Models\Client;
 use App\Models\CompanyProfile;
 use App\Models\ProductCategory;
 use App\Models\AccountLedger;
+use App\Models\LedgerTransaction;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
 use App\Services\InvoicePdfService;
@@ -265,7 +266,10 @@ class InvoiceManagement extends Component
                     $this->success('Invoice updated successfully!');
                 } else {
                     $invoice = Invoice::create($data);
-                    $this->success('Invoice created successfully!');
+                    
+                    // FIXED: Create ledger entries when invoice is created (draft state)
+                    // Only create accounting entries when invoice is sent/finalized
+                    $this->success('Invoice created successfully! Mark as "Sent" to create accounting entries.');
                 }
 
                 $this->closeInvoiceModal();
@@ -314,15 +318,25 @@ class InvoiceManagement extends Component
     public function markAsSent($invoiceId)
     {
         try {
-            $invoice = Invoice::find($invoiceId);
-            if ($invoice) {
-                $invoice->markAsSent();
-                $this->success('Invoice marked as sent!', 'Ledger entries have been created.');
-                $this->dispatch('refreshInvoices');
-            }
+            DB::transaction(function () use ($invoiceId) {
+                $invoice = Invoice::with(['client'])->find($invoiceId);
+                if ($invoice) {
+                    // Update invoice status
+                    $invoice->update([
+                        'status' => 'sent',
+                        'sent_at' => now(),
+                    ]);
+
+                    // FIXED: Create proper accounting ledger entries
+                    $this->createInvoiceLedgerEntries($invoice);
+
+                    $this->success('Invoice marked as sent!', 'Accounting entries have been created.');
+                    $this->dispatch('refreshInvoices');
+                }
+            });
         } catch (\Exception $e) {
             Log::error('Error marking invoice as sent: ' . $e->getMessage());
-            $this->error('Error marking invoice as sent');
+            $this->error('Error marking invoice as sent: ' . $e->getMessage());
         }
     }
 
@@ -374,6 +388,44 @@ class InvoiceManagement extends Component
         $this->paymentNotes = '';
     }
 
+
+    private function createInvoiceLedgerEntries(Invoice $invoice)
+    {
+        // 1. DEBIT: Client Account (Accounts Receivable) - Asset increases
+        $clientLedger = AccountLedger::getOrCreateClientLedger($invoice->company_profile_id, $invoice->client);
+
+        LedgerTransaction::create([
+            'company_profile_id' => $invoice->company_profile_id,
+            'ledger_id' => $clientLedger->id,
+            'date' => $invoice->invoice_date,
+            'type' => 'sale', // Use existing enum value
+            'description' => "Invoice {$invoice->invoice_number} - {$invoice->client->name}",
+            'debit_amount' => $invoice->total_amount, // Client owes us money
+            'credit_amount' => 0,
+            'reference' => $invoice->invoice_number,
+        ]);
+
+        // 2. CREDIT: Sales Revenue Account (Income) - Income increases
+        $incomeLedger = AccountLedger::getOrCreateIncomeLedger($invoice->company_profile_id);
+
+        LedgerTransaction::create([
+            'company_profile_id' => $invoice->company_profile_id,
+            'ledger_id' => $incomeLedger->id,
+            'date' => $invoice->invoice_date,
+            'type' => 'sale', // Use existing enum value
+            'description' => "Sale to {$invoice->client->name} - Invoice {$invoice->invoice_number}",
+            'debit_amount' => 0,
+            'credit_amount' => $invoice->total_amount, // Income increases
+            'reference' => $invoice->invoice_number,
+        ]);
+
+        Log::info('Invoice ledger entries created', [
+            'invoice_id' => $invoice->id,
+            'invoice_number' => $invoice->invoice_number,
+            'amount' => $invoice->total_amount
+        ]);
+    }
+
     public function processPayment()
     {
         $this->validate([
@@ -385,20 +437,94 @@ class InvoiceManagement extends Component
         ]);
 
         try {
-            $this->paymentInvoice->addPayment(
-                $this->paymentAmount,
-                $this->paymentDate,
-                $this->paymentMethod,
-                $this->paymentReference,
-                $this->paymentNotes
-            );
+            DB::transaction(function () {
+                // FIXED: Create payment record and ledger entries manually
+                $payment = InvoicePayment::create([
+                    'invoice_id' => $this->paymentInvoice->id,
+                    'payment_reference' => InvoicePayment::generatePaymentReference(),
+                    'amount' => $this->paymentAmount,
+                    'payment_date' => $this->paymentDate,
+                    'payment_method' => $this->paymentMethod,
+                    'reference_number' => $this->paymentReference,
+                    'notes' => $this->paymentNotes,
+                    'created_by' => auth()->id(),
+                ]);
 
-            $this->success('Payment recorded successfully!', 'Ledger entries have been updated.');
+                // Update invoice paid amount
+                $this->paymentInvoice->increment('paid_amount', $this->paymentAmount);
+                $this->updateInvoicePaymentStatus($this->paymentInvoice);
+
+                // Create ledger entries
+                $this->createPaymentLedgerEntries($payment);
+
+                $this->success('Payment recorded successfully!', 'Ledger entries have been updated.');
+            });
+
             $this->closePaymentModal();
             $this->dispatch('refreshInvoices');
         } catch (\Exception $e) {
             Log::error('Error processing payment: ' . $e->getMessage());
             $this->error('Error processing payment: ' . $e->getMessage());
+        }
+    }
+
+    // NEW: Create payment ledger entries
+    private function createPaymentLedgerEntries(InvoicePayment $payment)
+    {
+        $invoice = $payment->invoice;
+
+        // 1. DEBIT: Cash/Bank Account (Asset increases)
+        if ($payment->payment_method === 'cash') {
+            $paymentLedger = AccountLedger::getOrCreateCashLedger($invoice->company_profile_id);
+        } else {
+            $paymentLedger = AccountLedger::getOrCreateBankLedger($invoice->company_profile_id, $payment->payment_method);
+        }
+
+        LedgerTransaction::create([
+            'company_profile_id' => $invoice->company_profile_id,
+            'ledger_id' => $paymentLedger->id,
+            'date' => $payment->payment_date,
+            'type' => 'receipt', // Use existing enum value
+            'description' => "Payment received from {$invoice->client->name} via {$payment->payment_method}",
+            'debit_amount' => $payment->amount, // Cash/Bank increases
+            'credit_amount' => 0,
+            'reference' => $payment->payment_reference,
+        ]);
+
+        // 2. CREDIT: Client Account (Accounts Receivable) - Asset decreases
+        $clientLedger = AccountLedger::getOrCreateClientLedger($invoice->company_profile_id, $invoice->client);
+
+        LedgerTransaction::create([
+            'company_profile_id' => $invoice->company_profile_id,
+            'ledger_id' => $clientLedger->id,
+            'date' => $payment->payment_date,
+            'type' => 'receipt', // Use existing enum value
+            'description' => "Payment received for Invoice {$invoice->invoice_number}",
+            'debit_amount' => 0,
+            'credit_amount' => $payment->amount, // Client owes us less
+            'reference' => $payment->payment_reference,
+        ]);
+
+        Log::info('Payment ledger entries created', [
+            'payment_id' => $payment->id,
+            'invoice_number' => $invoice->invoice_number,
+            'amount' => $payment->amount
+        ]);
+    }
+
+    // NEW: Update invoice payment status
+    private function updateInvoicePaymentStatus(Invoice $invoice)
+    {
+        if ($invoice->paid_amount >= $invoice->total_amount) {
+            $invoice->update([
+                'payment_status' => 'paid',
+                'status' => 'paid',
+                'paid_at' => now(),
+            ]);
+        } elseif ($invoice->paid_amount > 0) {
+            $invoice->update(['payment_status' => 'partially_paid']);
+        } else {
+            $invoice->update(['payment_status' => 'unpaid']);
         }
     }
 

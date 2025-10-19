@@ -8,6 +8,8 @@ use Mary\Traits\Toast;
 use App\Models\InvoicePayment;
 use App\Models\Invoice;
 use App\Models\Client;
+use App\Models\AccountLedger;
+use App\Models\LedgerTransaction;
 use App\Models\CompanyProfile;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
@@ -188,22 +190,36 @@ class InvoicePaymentManagement extends Component
         ]);
 
         try {
-            $invoice = Invoice::find($this->selectedInvoiceId);
+            DB::transaction(function () {
+                $invoice = Invoice::with(['client'])->find($this->selectedInvoiceId);
 
-            if ($this->paymentAmount > $invoice->outstanding_amount) {
-                $this->addError('paymentAmount', 'Payment amount cannot exceed outstanding amount of ₹' . number_format($invoice->outstanding_amount, 2));
-                return;
-            }
+                if ($this->paymentAmount > $invoice->outstanding_amount) {
+                    $this->addError('paymentAmount', 'Payment amount cannot exceed outstanding amount of ₹' . number_format($invoice->outstanding_amount, 2));
+                    return;
+                }
 
-            $invoice->addPayment(
-                $this->paymentAmount,
-                $this->paymentDate,
-                $this->paymentMethod,
-                $this->paymentReference,
-                $this->paymentNotes
-            );
+                // FIXED: Create payment record manually
+                $payment = InvoicePayment::create([
+                    'invoice_id' => $invoice->id,
+                    'payment_reference' => InvoicePayment::generatePaymentReference(),
+                    'amount' => $this->paymentAmount,
+                    'payment_date' => $this->paymentDate,
+                    'payment_method' => $this->paymentMethod,
+                    'reference_number' => $this->paymentReference,
+                    'notes' => $this->paymentNotes,
+                    'created_by' => auth()->id(),
+                ]);
 
-            $this->success('Payment recorded successfully!', 'Invoice payment has been processed and ledger updated.');
+                // Update invoice
+                $invoice->increment('paid_amount', $this->paymentAmount);
+                $this->updateInvoicePaymentStatus($invoice);
+
+                // Create ledger entries
+                $this->createPaymentLedgerEntries($payment);
+
+                $this->success('Payment recorded successfully!', 'Invoice payment has been processed and ledger updated.');
+            });
+
             $this->closePaymentModal();
             $this->calculateStats();
             $this->dispatch('refreshPayments');
@@ -212,6 +228,60 @@ class InvoicePaymentManagement extends Component
             $this->error('Error recording payment: ' . $e->getMessage());
         }
     }
+
+    // Add the helper methods from InvoiceManagement to this component too
+    private function createPaymentLedgerEntries(InvoicePayment $payment)
+    {
+        $invoice = $payment->invoice;
+
+        // 1. DEBIT: Cash/Bank Account (Asset increases)
+        if ($payment->payment_method === 'cash') {
+            $paymentLedger = AccountLedger::getOrCreateCashLedger($invoice->company_profile_id);
+        } else {
+            $paymentLedger = AccountLedger::getOrCreateBankLedger($invoice->company_profile_id, $payment->payment_method);
+        }
+
+        LedgerTransaction::create([
+            'company_profile_id' => $invoice->company_profile_id,
+            'ledger_id' => $paymentLedger->id,
+            'date' => $payment->payment_date,
+            'type' => 'receipt', // Use existing enum value
+            'description' => "Payment received from {$invoice->client->name} via {$payment->payment_method}",
+            'debit_amount' => $payment->amount, // Cash/Bank increases
+            'credit_amount' => 0,
+            'reference' => $payment->payment_reference,
+        ]);
+
+        // 2. CREDIT: Client Account (Accounts Receivable) - Asset decreases
+        $clientLedger = AccountLedger::getOrCreateClientLedger($invoice->company_profile_id, $invoice->client);
+
+        LedgerTransaction::create([
+            'company_profile_id' => $invoice->company_profile_id,
+            'ledger_id' => $clientLedger->id,
+            'date' => $payment->payment_date,
+            'type' => 'receipt', // Use existing enum value
+            'description' => "Payment received for Invoice {$invoice->invoice_number}",
+            'debit_amount' => 0,
+            'credit_amount' => $payment->amount, // Client owes us less
+            'reference' => $payment->payment_reference,
+        ]);
+    }
+
+    private function updateInvoicePaymentStatus(Invoice $invoice)
+    {
+        if ($invoice->paid_amount >= $invoice->total_amount) {
+            $invoice->update([
+                'payment_status' => 'paid',
+                'status' => 'paid',
+                'paid_at' => now(),
+            ]);
+        } elseif ($invoice->paid_amount > 0) {
+            $invoice->update(['payment_status' => 'partially_paid']);
+        } else {
+            $invoice->update(['payment_status' => 'unpaid']);
+        }
+    }
+
 
     public function viewPayment($paymentId)
     {

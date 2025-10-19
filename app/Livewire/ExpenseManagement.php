@@ -226,9 +226,8 @@ class ExpenseManagement extends Component
                 ];
 
                 if ($this->editingExpense) {
-                    // Update existing expense (no ledger changes for edits)
-                    $this->editingExpense->update($data);
-                    $this->success('Expense updated successfully!');
+                    // FIXED: Handle expense editing with ledger updates
+                    $this->updateExpenseWithLedger($data);
                 } else {
                     // Create new expense
                     $expense = Expense::create($data);
@@ -256,6 +255,39 @@ class ExpenseManagement extends Component
         }
     }
 
+    // FIXED: Handle expense editing with proper ledger management
+    private function updateExpenseWithLedger($data)
+    {
+        $originalAmount = $this->editingExpense->amount;
+        $originalPaymentMethod = $this->editingExpense->payment_method;
+        $originalCategoryId = $this->editingExpense->category_id;
+
+        // Update the expense
+        $this->editingExpense->update($data);
+        $expense = $this->editingExpense->fresh(); // Get updated model
+
+        // If amount, payment method, or category changed, update ledger
+        if (
+            $originalAmount != $expense->amount ||
+            $originalPaymentMethod != $expense->payment_method ||
+            $originalCategoryId != $expense->category_id
+        ) {
+
+            // Delete old ledger transactions
+            LedgerTransaction::where('reference', $expense->expense_ref)
+                ->where('company_profile_id', $expense->company_profile_id)
+                ->delete();
+
+            // Create new ledger transactions
+            $this->createExpenseLedgerTransactions($expense);
+
+            $this->success('Expense and ledger entries updated successfully!');
+        } else {
+            $this->success('Expense updated successfully!');
+        }
+    }
+
+    // FIXED: Improved ledger transaction creation
     private function createExpenseLedgerTransactions($expense)
     {
         // Get or create expense category ledger
@@ -264,36 +296,48 @@ class ExpenseManagement extends Component
             $expense->category
         );
 
-        // Create expense ledger transaction (Debit - expense increases)
+        // 1. DEBIT: Expense Account (increases business expenses)
         LedgerTransaction::create([
             'company_profile_id' => $expense->company_profile_id,
             'ledger_id' => $categoryLedger->id,
             'date' => $expense->expense_date,
-            'type' => 'expense',
+            'type' => 'expense', // Use enum value
             'description' => $expense->expense_title . ' - ' . $expense->category->name,
             'debit_amount' => $expense->amount, // Expense increases (debit)
             'credit_amount' => 0,
             'reference' => $expense->expense_ref,
         ]);
 
-        // Get cash/bank ledger based on payment method
-        if (in_array($expense->payment_method, ['cash'])) {
-            $paymentLedger = AccountLedger::getOrCreateCashLedger($expense->company_profile_id);
-        } else {
-            $paymentLedger = AccountLedger::getOrCreateBankLedger($expense->company_profile_id, $expense->payment_method);
-        }
+        // 2. CREDIT: Cash/Bank Account (decreases cash/bank balance)
+        $paymentLedger = $this->getPaymentLedger($expense->company_profile_id, $expense->payment_method);
 
-        // Create payment ledger transaction (Credit - cash/bank decreases)
         LedgerTransaction::create([
             'company_profile_id' => $expense->company_profile_id,
             'ledger_id' => $paymentLedger->id,
             'date' => $expense->expense_date,
-            'type' => 'expense',
+            'type' => 'expense', // Use enum value
             'description' => "Payment for {$expense->expense_title} via {$expense->payment_method_label}",
             'debit_amount' => 0,
             'credit_amount' => $expense->amount, // Cash/Bank decreases (credit)
             'reference' => $expense->expense_ref,
         ]);
+
+        Log::info('Expense ledger entries created', [
+            'expense_id' => $expense->id,
+            'expense_ref' => $expense->expense_ref,
+            'amount' => $expense->amount,
+            'category' => $expense->category->name
+        ]);
+    }
+
+    // FIXED: Centralized payment ledger logic
+    private function getPaymentLedger($companyId, $paymentMethod)
+    {
+        if ($paymentMethod === 'cash') {
+            return AccountLedger::getOrCreateCashLedger($companyId);
+        } else {
+            return AccountLedger::getOrCreateBankLedger($companyId, $paymentMethod);
+        }
     }
 
 
@@ -331,6 +375,9 @@ class ExpenseManagement extends Component
                         ->where('company_profile_id', $expense->company_profile_id)
                         ->delete();
 
+                    // FIXED: Recalculate ledger balances after deleting transactions
+                    $this->recalculateAffectedLedgers($expense);
+
                     // Delete receipt file if exists
                     if ($expense->receipt_path) {
                         Storage::disk('public')->delete($expense->receipt_path);
@@ -345,6 +392,21 @@ class ExpenseManagement extends Component
             Log::error('Error deleting expense: ' . $e->getMessage());
             $this->error('Error deleting expense');
         }
+    }
+
+    // FIXED: Recalculate ledger balances after transaction deletion
+    private function recalculateAffectedLedgers($expense)
+    {
+        // Recalculate expense category ledger
+        $categoryLedger = AccountLedger::getOrCreateExpenseLedger(
+            $expense->company_profile_id,
+            $expense->category
+        );
+        $categoryLedger->updateBalance();
+
+        // Recalculate payment ledger
+        $paymentLedger = $this->getPaymentLedger($expense->company_profile_id, $expense->payment_method);
+        $paymentLedger->updateBalance();
     }
 
     public function viewExpense($expenseId)
