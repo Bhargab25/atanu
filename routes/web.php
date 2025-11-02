@@ -23,7 +23,12 @@ use Illuminate\Http\Request;
 use App\Livewire\UserProfile;
 
 
-Route::view('/', 'welcome');
+Route::get('/', function () {
+    if (Auth::check()) {
+        return redirect()->route('dashboard');
+    }
+    return redirect()->route('login');
+})->name('home');
 
 Route::post('/logout', function (Request $request) {
     Auth::logout();
@@ -39,15 +44,19 @@ Route::middleware(['auth'])->group(function () {
         ->name('profile.edit');
 });
 
-Route::view('dashboard', 'dashboard')
-    ->middleware(['auth', 'verified'])
-    ->name('dashboard');
+// Route::view('dashboard', 'dashboard')
+//     ->middleware(['auth', 'verified'])
+//     ->name('dashboard');
+Route::get('/dashboard', \App\Livewire\Dashboard::class)->name('dashboard')
+    ->middleware(['auth', 'verified']);
 
 Route::get('/categories', ProductCategory::class)
     ->middleware(['auth', 'verified'])
     ->name('categories.index');
 
-Route::get('/reports/financial', App\Livewire\FinancialReports::class)->name('reports.financial');
+Route::get('/reports/financial', App\Livewire\FinancialReports::class)
+    ->middleware(['auth', 'verified'])
+    ->name('financial-reports');
 
 Route::get('/products', Product::class)
     ->middleware(['auth', 'verified'])
@@ -122,19 +131,19 @@ Route::get('/settings/users', \App\Livewire\UserManagement::class)
     ->middleware(['auth', 'verified'])
     ->name('user-management.index');
 
-Route::middleware(['auth'])->group(function () {
-    Route::get('/monthly-bill/download/{monthlyBill}', function (MonthlyBill $monthlyBill) {
-        $pdfService = new \App\Services\InvoicePdfService();
-        $pdfPath = $pdfService->generateMonthlyBillPdf($monthlyBill);
-        return response()->download($pdfPath)->deleteFileAfterSend();
-    })->name('monthly-bill.download');
+// Route::middleware(['auth'])->group(function () {
+//     Route::get('/monthly-bill/download/{monthlyBill}', function (MonthlyBill $monthlyBill) {
+//         $pdfService = new \App\Services\InvoicePdfService();
+//         $pdfPath = $pdfService->generateMonthlyBillPdf($monthlyBill);
+//         return response()->download($pdfPath)->deleteFileAfterSend();
+//     })->name('monthly-bill.download');
 
-    Route::get('/invoice/download/{invoice}', function (Invoice $invoice) {
-        $pdfService = new \App\Services\InvoicePdfService();
-        $pdfPath = $pdfService->generateInvoicePdf($invoice);
-        return response()->download($pdfPath)->deleteFileAfterSend();
-    })->name('invoice.download');
-});
+//     Route::get('/invoice/download/{invoice}', function (Invoice $invoice) {
+//         $pdfService = new \App\Services\InvoicePdfService();
+//         $pdfPath = $pdfService->generateInvoicePdf($invoice);
+//         return response()->download($pdfPath)->deleteFileAfterSend();
+//     })->name('invoice.download');
+// });
 
 Route::get('/download/ledger-pdf/{path}', function ($path) {
     $decodedPath = base64_decode($path);

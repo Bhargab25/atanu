@@ -113,7 +113,7 @@
                     <x-mary-menu-item title="Clients" icon="o-users" link="/clients" />
                     <x-mary-menu-item title="Invoices" icon="o-document-text" link="/invoices" />
                     <x-mary-menu-item title="Invoice Payments" icon="o-credit-card" link="/invoice-payments" />
-                    <x-mary-menu-item title="Sales Reports" icon="o-presentation-chart-line" link="/sales-reports" />
+                  {{--   <x-mary-menu-item title="Sales Reports" icon="o-presentation-chart-line" link="/sales-reports" /> --}}
                 </x-mary-menu-sub>
 
                 {{-- Expense Managementpets --}}
@@ -122,18 +122,18 @@
                 <x-mary-menu-separator />
 
                 {{-- Financial Management --}}
-                <x-mary-menu-sub title="Financial Management" icon="o-currency-rupee">
+                {{-- <x-mary-menu-sub title="Financial Management" icon="o-currency-rupee">
                     <x-mary-menu-item title="Payments" icon="o-credit-card" link="/payments" />
                     <x-mary-menu-item title="Outstanding" icon="o-exclamation-triangle" link="/outstanding" />
                     <x-mary-menu-item title="Cash Flow" icon="o-arrows-right-left" link="/cash-flow" />
-                </x-mary-menu-sub>
+                </x-mary-menu-sub> --}}
 
                 {{-- Reports & Analytics --}}
                 <x-mary-menu-sub title="Reports & Analytics" icon="o-chart-pie">
-                    <x-mary-menu-item title="Stock Reports" icon="o-chart-bar-square" link="/reports/stock" />
+                   {{-- <x-mary-menu-item title="Stock Reports" icon="o-chart-bar-square" link="/reports/stock" />
                     <x-mary-menu-item title="Sales Analytics" icon="o-chart-bar" link="/sales-analytics" />
+                    <x-mary-menu-item title="Business Overview" icon="o-presentation-chart-bar" link="/reports/overview" /> --}}
                     <x-mary-menu-item title="Financial Reports" icon="o-calculator" link="/reports/financial" />
-                    <x-mary-menu-item title="Business Overview" icon="o-presentation-chart-bar" link="/reports/overview" />
                 </x-mary-menu-sub>
 
                 <x-mary-menu-separator />
@@ -142,8 +142,8 @@
                 <x-mary-menu-sub title="Settings" icon="o-cog-6-tooth">
                     <x-mary-menu-item title="Company Profile" icon="o-building-office" link="/settings/company" />
                     <x-mary-menu-item title="User Management" icon="o-user-group" link="/settings/users" />
-                    <x-mary-menu-item title="System Settings" icon="o-adjustments-vertical" link="/settings/system" />
-                    <x-mary-menu-item title="Backup & Export" icon="o-arrow-down-tray" link="/settings/backup" />
+                 {{--   <x-mary-menu-item title="System Settings" icon="o-adjustments-vertical" link="/settings/system" />
+                    <x-mary-menu-item title="Backup & Export" icon="o-arrow-down-tray" link="/settings/backup" />  --}}
                 </x-mary-menu-sub>
             </x-mary-menu>
         </x-slot:sidebar>
