@@ -21,7 +21,7 @@ return new class extends Migration
             $table->string('password');
 
             // extra fields your model expects
-            $table->foreignId('role_id')->nullable()->constrained('roles')->nullOnDelete();
+            $table->string('role_id')->nullable()->constrained('roles')->nullOnDelete();
             $table->boolean('is_active')->default(true); // 👈 important, default active
             $table->json('preferences')->nullable();
             $table->string('avatar')->nullable();
