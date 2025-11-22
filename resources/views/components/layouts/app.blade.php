@@ -141,8 +141,8 @@
                 {{-- Settings --}}
                 <x-mary-menu-sub title="Settings" icon="o-cog-6-tooth">
                     <x-mary-menu-item title="Company Profile" icon="o-building-office" link="/settings/company" />
-                    <x-mary-menu-item title="User Management" icon="o-user-group" link="/settings/users" />
-                 {{--   <x-mary-menu-item title="System Settings" icon="o-adjustments-vertical" link="/settings/system" />
+                  {{--  <x-mary-menu-item title="User Management" icon="o-user-group" link="/settings/users" />
+                    <x-mary-menu-item title="System Settings" icon="o-adjustments-vertical" link="/settings/system" />
                     <x-mary-menu-item title="Backup & Export" icon="o-arrow-down-tray" link="/settings/backup" />  --}}
                 </x-mary-menu-sub>
             </x-mary-menu>
