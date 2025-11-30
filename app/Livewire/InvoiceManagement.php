@@ -69,6 +69,11 @@ class InvoiceManagement extends Component
         ['value' => 'cheque', 'label' => 'Cheque'],
     ];
 
+    public $showVoidModal = false;
+    public $voidingInvoice = null;
+    public $voidReason = '';
+    public $confirmVoid = false;
+
     protected $listeners = ['refreshInvoices' => '$refresh'];
 
     public function mount()
@@ -218,6 +223,13 @@ class InvoiceManagement extends Component
         $discount = (float) $this->discountAmount;
 
         $this->totalAmount = $this->subtotal + $tax - $discount;
+
+        Log::info('Calculated totals', [
+            'subtotal' => $this->subtotal,
+            'tax' => $tax,
+            'discount' => $discount,
+            'total' => $this->totalAmount,
+        ]);
     }
 
     public function openInvoiceModal()
@@ -552,23 +564,241 @@ class InvoiceManagement extends Component
         }
     }
 
+    public function openVoidModal($invoiceId)
+    {
+        $this->voidingInvoice = Invoice::with(['client', 'payments'])->find($invoiceId);
+
+        if ($this->voidingInvoice) {
+            // Check if invoice can be voided
+            if ($this->voidingInvoice->status === 'cancelled') {
+                $this->error('This invoice is already voided/cancelled.');
+                return;
+            }
+
+            if ($this->voidingInvoice->status === 'draft') {
+                $this->error('Draft invoices should be deleted, not voided.');
+                return;
+            }
+
+            $this->voidReason = '';
+            $this->showVoidModal = true;
+        }
+    }
+
+    /**
+     * Close void modal
+     */
+    public function closeVoidModal()
+    {
+        $this->showVoidModal = false;
+        $this->voidingInvoice = null;
+        $this->voidReason = '';
+        $this->resetValidation();
+    }
+
+    /**
+     * Void/Cancel the invoice with proper accounting reversal
+     */
+    public function voidInvoice()
+    {
+        $this->validate([
+            'voidReason' => 'required|string|min:10|max:500',
+            'confirmVoid' => 'accepted', // Add this line
+        ], [
+            'voidReason.required' => 'Please provide a reason for voiding this invoice.',
+            'voidReason.min' => 'Void reason must be at least 10 characters.',
+            'voidReason.max' => 'Void reason cannot exceed 500 characters.',
+            'confirmVoid.accepted' => 'Please confirm you understand this action.', // Add this
+        ]);
+
+        try {
+            DB::transaction(function () {
+                $invoice = $this->voidingInvoice;
+
+                // STEP 1: Reverse all payment ledger entries
+                if ($invoice->payments->count() > 0) {
+                    foreach ($invoice->payments as $payment) {
+                        $this->reversePaymentLedgerEntries($payment);
+                    }
+
+                    // Update invoice paid amount to 0
+                    $invoice->update(['paid_amount' => 0]);
+                }
+
+                // STEP 2: Reverse invoice sale ledger entries (if invoice was sent)
+                if ($invoice->status === 'sent' || $invoice->status === 'paid') {
+                    $this->reverseInvoiceLedgerEntries($invoice);
+                }
+
+                // STEP 3: Update invoice status to cancelled
+                $invoice->update([
+                    'status' => 'cancelled',
+                    'payment_status' => 'unpaid',
+                    'notes' => ($invoice->notes ? $invoice->notes . "\n\n" : '')
+                        . "=== VOIDED ON " . now()->format('Y-m-d H:i:s') . " ===\n"
+                        . "Voided by: " . auth()->user()->name . "\n"
+                        . "Reason: " . $this->voidReason,
+                ]);
+
+                Log::info('Invoice voided successfully', [
+                    'invoice_id' => $invoice->id,
+                    'invoice_number' => $invoice->invoice_number,
+                    'user_id' => auth()->id(),
+                    'reason' => $this->voidReason,
+                    'had_payments' => $invoice->payments->count() > 0,
+                    'total_amount' => $invoice->total_amount,
+                ]);
+
+                $this->success(
+                    'Invoice Voided Successfully!',
+                    'All accounting entries have been reversed. Invoice #' . $invoice->invoice_number . ' is now cancelled.'
+                );
+            });
+
+            $this->closeVoidModal();
+            $this->dispatch('refreshInvoices');
+        } catch (\Exception $e) {
+            Log::error('Error voiding invoice: ' . $e->getMessage(), [
+                'invoice_id' => $this->voidingInvoice->id,
+                'user_id' => auth()->id(),
+                'trace' => $e->getTraceAsString()
+            ]);
+            $this->error('Error voiding invoice: ' . $e->getMessage());
+        }
+    }
+
+    /**
+     * Reverse invoice sale ledger entries
+     */
+    private function reverseInvoiceLedgerEntries(Invoice $invoice)
+    {
+        // Find original invoice transactions
+        $originalTransactions = LedgerTransaction::where('reference', $invoice->invoice_number)
+            ->where('company_profile_id', $invoice->company_profile_id)
+            ->get();
+
+        if ($originalTransactions->isEmpty()) {
+            Log::warning('No ledger transactions found for invoice', [
+                'invoice_number' => $invoice->invoice_number
+            ]);
+            return;
+        }
+
+        // Create reversing entries for each original transaction
+        foreach ($originalTransactions as $transaction) {
+            LedgerTransaction::create([
+                'company_profile_id' => $transaction->company_profile_id,
+                'ledger_id' => $transaction->ledger_id,
+                'date' => now()->toDateString(),
+                'type' => 'sale', // Keep same type for consistency
+                'description' => "VOID/REVERSAL: " . $transaction->description . " - Cancelled by " . auth()->user()->name,
+                'debit_amount' => $transaction->credit_amount, // Swap debit/credit
+                'credit_amount' => $transaction->debit_amount, // Swap debit/credit
+                'reference' => $invoice->invoice_number . '-VOID',
+            ]);
+        }
+
+        Log::info('Invoice ledger entries reversed', [
+            'invoice_number' => $invoice->invoice_number,
+            'transactions_reversed' => $originalTransactions->count(),
+            'amount' => $invoice->total_amount
+        ]);
+    }
+
+    /**
+     * Reverse payment ledger entries
+     */
+    private function reversePaymentLedgerEntries(InvoicePayment $payment)
+    {
+        $invoice = $payment->invoice;
+
+        // Find original payment transactions
+        $originalTransactions = LedgerTransaction::where('reference', $payment->payment_reference)
+            ->where('company_profile_id', $invoice->company_profile_id)
+            ->get();
+
+        if ($originalTransactions->isEmpty()) {
+            Log::warning('No payment transactions found', [
+                'payment_reference' => $payment->payment_reference
+            ]);
+            return;
+        }
+
+        // Create reversing entries
+        foreach ($originalTransactions as $transaction) {
+            LedgerTransaction::create([
+                'company_profile_id' => $transaction->company_profile_id,
+                'ledger_id' => $transaction->ledger_id,
+                'date' => now()->toDateString(),
+                'type' => 'receipt', // Keep same type
+                'description' => "VOID/REVERSAL: " . $transaction->description . " - Invoice Cancelled",
+                'debit_amount' => $transaction->credit_amount, // Swap amounts
+                'credit_amount' => $transaction->debit_amount, // Swap amounts
+                'reference' => $payment->payment_reference . '-VOID',
+            ]);
+        }
+
+        Log::info('Payment ledger entries reversed', [
+            'payment_reference' => $payment->payment_reference,
+            'transactions_reversed' => $originalTransactions->count(),
+            'amount' => $payment->amount
+        ]);
+    }
+
+    /**
+     * Updated delete method - only allow deleting draft invoices
+     */
     public function deleteInvoice($invoiceId)
     {
         try {
-            $invoice = Invoice::find($invoiceId);
-            if ($invoice) {
+            $invoice = Invoice::with(['payments'])->find($invoiceId);
+
+            if (!$invoice) {
+                $this->error('Invoice not found.');
+                return;
+            }
+
+            // Only allow deleting draft invoices
+            if ($invoice->status !== 'draft') {
+                $this->error(
+                    'Cannot delete this invoice.',
+                    'Only draft invoices can be deleted. Please void this invoice instead.'
+                );
+                return;
+            }
+
+            if ($invoice->payments->count() > 0) {
+                $this->error(
+                    'Cannot delete invoice with payments.',
+                    'This invoice has payment records. Please void it instead.'
+                );
+                return;
+            }
+
+            DB::transaction(function () use ($invoice) {
                 // Delete PDF file if exists
-                if ($invoice->pdf_path) {
+                if ($invoice->pdf_path && Storage::disk('public')->exists($invoice->pdf_path)) {
                     Storage::disk('public')->delete($invoice->pdf_path);
                 }
 
+                // Delete the invoice
                 $invoice->delete();
-                $this->success('Invoice deleted successfully!');
-                $this->dispatch('refreshInvoices');
-            }
+
+                Log::info('Draft invoice deleted', [
+                    'invoice_id' => $invoice->id,
+                    'invoice_number' => $invoice->invoice_number,
+                    'user_id' => auth()->id()
+                ]);
+            });
+
+            $this->success('Draft invoice deleted successfully!');
+            $this->dispatch('refreshInvoices');
         } catch (\Exception $e) {
-            Log::error('Error deleting invoice: ' . $e->getMessage());
-            $this->error('Error deleting invoice');
+            Log::error('Error deleting invoice: ' . $e->getMessage(), [
+                'invoice_id' => $invoiceId,
+                'user_id' => auth()->id()
+            ]);
+            $this->error('Error deleting invoice: ' . $e->getMessage());
         }
     }
 

@@ -49,7 +49,7 @@
     @if($selectedCompanyId)
     @php
     $totalInvoices = \App\Models\Invoice::forCompany($selectedCompanyId)->count();
-    $totalAmount = \App\Models\Invoice::forCompany($selectedCompanyId)->sum('total_amount');
+    $totalAmounts = \App\Models\Invoice::forCompany($selectedCompanyId)->sum('total_amount');
     $paidAmount = \App\Models\Invoice::forCompany($selectedCompanyId)->where('payment_status', 'paid')->sum('total_amount');
     $unpaidAmount = \App\Models\Invoice::forCompany($selectedCompanyId)->where('payment_status', 'unpaid')->sum('total_amount');
     @endphp
@@ -74,7 +74,7 @@
                 </div>
                 <div>
                     <div class="text-xs text-gray-600 uppercase tracking-wide">Total Amount</div>
-                    <div class="text-xl font-bold text-gray-800">₹{{ number_format($totalAmount, 2) }}</div>
+                    <div class="text-xl font-bold text-gray-800">₹{{ number_format($totalAmounts, 2) }}</div>
                 </div>
             </div>
         </x-mary-card>
@@ -222,6 +222,7 @@
                         </td>
                         <td>
                             <div class="flex gap-1">
+                                {{-- View (Always Available for ALL statuses) --}}
                                 <x-mary-button
                                     icon="o-eye"
                                     class="btn-circle btn-ghost btn-xs"
@@ -229,6 +230,7 @@
                                     @click="$wire.viewInvoice({{ $invoice->id }})" />
 
                                 @if($invoice->status === 'draft')
+                                {{-- DRAFT ACTIONS --}}
                                 <x-mary-button
                                     icon="o-pencil"
                                     class="btn-circle btn-ghost btn-xs text-primary"
@@ -240,8 +242,31 @@
                                     class="btn-circle btn-ghost btn-xs text-blue-600"
                                     tooltip="Mark as Sent"
                                     @click="$wire.markAsSent({{ $invoice->id }})" />
-                                @endif
 
+                                <x-mary-button
+                                    icon="o-document-arrow-down"
+                                    class="btn-circle btn-ghost btn-xs text-green-600"
+                                    tooltip="Download PDF"
+                                    @click="$wire.downloadInvoice({{ $invoice->id }})" />
+
+                                <x-mary-button
+                                    icon="o-trash"
+                                    class="btn-circle btn-ghost btn-xs text-error"
+                                    tooltip="Delete Draft"
+                                    @click="$wire.deleteInvoice({{ $invoice->id }})" />
+
+                                @elseif($invoice->status === 'cancelled')
+                                {{-- CANCELLED/VOIDED ACTIONS - Limited --}}
+                                <x-mary-button
+                                    icon="o-document-arrow-down"
+                                    class="btn-circle btn-ghost btn-xs text-green-600"
+                                    tooltip="Download PDF"
+                                    @click="$wire.downloadInvoice({{ $invoice->id }})" />
+
+                                <x-mary-badge value="VOIDED" class="badge-error badge-xs ml-1" />
+
+                                @else
+                                {{-- SENT/PAID ACTIONS - Full functionality --}}
                                 <x-mary-button
                                     icon="o-document-arrow-down"
                                     class="btn-circle btn-ghost btn-xs text-green-600"
@@ -256,12 +281,12 @@
                                     @click="$wire.openPaymentModal({{ $invoice->id }})" />
                                 @endif
 
-                                @if($invoice->status === 'draft')
+                                {{-- ADD VOID BUTTON - New functionality --}}
                                 <x-mary-button
-                                    icon="o-trash"
-                                    class="btn-circle btn-ghost btn-xs text-error"
-                                    tooltip="Delete Invoice"
-                                    @click="$wire.deleteInvoice({{ $invoice->id }})" />
+                                    icon="o-x-circle"
+                                    class="btn-circle btn-ghost btn-xs text-orange-600"
+                                    tooltip="Void Invoice"
+                                    @click="$wire.openVoidModal({{ $invoice->id }})" />
                                 @endif
                             </div>
                         </td>
@@ -739,6 +764,126 @@
                 class="btn-primary"
                 spinner="processPayment"
                 @click="$wire.processPayment()" />
+        </x-slot:actions>
+    </x-mary-modal>
+
+
+    {{-- Void Invoice Modal --}}
+    <x-mary-modal wire:model="showVoidModal"
+        :title="$voidingInvoice ? 'Void Invoice - ' . $voidingInvoice->invoice_number : 'Void Invoice'"
+        box-class="backdrop-blur max-w-2xl">
+
+        @if($voidingInvoice)
+        <div class="space-y-6">
+            {{-- Warning Alert --}}
+            <div class="alert alert-warning shadow-lg">
+                <div>
+                    <x-mary-icon name="o-exclamation-triangle" class="w-6 h-6" />
+                    <div>
+                        <h3 class="font-bold">⚠️ Warning: This action will:</h3>
+                        <ul class="list-disc ml-5 mt-2 text-sm space-y-1">
+                            <li>Mark invoice <strong>{{ $voidingInvoice->invoice_number }}</strong> as <strong class="text-error">CANCELLED</strong></li>
+                            <li>Reverse all accounting ledger entries</li>
+                            @if($voidingInvoice->payments->count() > 0)
+                            <li>Reverse <strong>{{ $voidingInvoice->payments->count() }}</strong> payment transaction(s) totaling <strong>₹{{ number_format($voidingInvoice->paid_amount, 2) }}</strong></li>
+                            @endif
+                            <li>Keep the invoice record for audit trail purposes</li>
+                            <li class="text-error font-semibold">This action cannot be undone!</li>
+                        </ul>
+                    </div>
+                </div>
+            </div>
+
+            {{-- Invoice Summary Card --}}
+            <div class="card bg-base-200">
+                <div class="card-body">
+                    <h4 class="card-title text-base">Invoice Summary</h4>
+                    <div class="grid grid-cols-2 gap-4 text-sm">
+                        <div>
+                            <span class="text-gray-600">Client:</span>
+                            <p class="font-semibold">{{ $voidingInvoice->client->name }}</p>
+                        </div>
+                        <div>
+                            <span class="text-gray-600">Invoice Date:</span>
+                            <p class="font-semibold">{{ $voidingInvoice->invoice_date->format('d M Y') }}</p>
+                        </div>
+                        <div>
+                            <span class="text-gray-600">Total Amount:</span>
+                            <p class="font-semibold text-lg">₹{{ number_format($voidingInvoice->total_amount, 2) }}</p>
+                        </div>
+                        <div>
+                            <span class="text-gray-600">Paid Amount:</span>
+                            <p class="font-semibold text-lg text-green-600">₹{{ number_format($voidingInvoice->paid_amount, 2) }}</p>
+                        </div>
+                        <div>
+                            <span class="text-gray-600">Current Status:</span>
+                            <div class="mt-1">
+                                <x-mary-badge :value="ucfirst($voidingInvoice->status)" :class="$voidingInvoice->status_badge_class" />
+                            </div>
+                        </div>
+                        <div>
+                            <span class="text-gray-600">Payment Count:</span>
+                            <p class="font-semibold">{{ $voidingInvoice->payments->count() }} payment(s)</p>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            {{-- Void Reason Input --}}
+            <div class="form-control">
+                <label class="label">
+                    <span class="label-text font-semibold">
+                        Reason for Voiding <span class="text-error">*</span>
+                    </span>
+                    <span class="label-text-alt {{ strlen($voidReason) > 500 ? 'text-error' : 'text-gray-500' }}">
+                        {{ strlen($voidReason) }}/500
+                    </span>
+                </label>
+                <textarea
+                    wire:model="voidReason"
+                    class="textarea textarea-bordered h-24 @error('voidReason') textarea-error @enderror"
+                    placeholder="Enter a detailed reason for voiding this invoice (minimum 10 characters required)..."
+                    maxlength="500"></textarea>
+                @error('voidReason')
+                <label class="label">
+                    <span class="label-text-alt text-error">
+                        <x-mary-icon name="o-exclamation-circle" class="w-4 h-4 inline mr-1" />
+                        {{ $message }}
+                    </span>
+                </label>
+                @enderror
+                <label class="label">
+                    <span class="label-text-alt text-gray-500">
+                        💡 This reason will be permanently recorded in the invoice notes for audit purposes.
+                    </span>
+                </label>
+            </div>
+
+            {{-- Confirmation Checkbox (Optional but recommended) --}}
+            <div class="form-control">
+                <label class="label cursor-pointer justify-start gap-3">
+                    <input type="checkbox" class="checkbox checkbox-error" wire:model="confirmVoid" />
+                    <span class="label-text">
+                        I understand this action will void the invoice and reverse all accounting entries
+                    </span>
+                </label>
+            </div>
+        </div>
+        @endif
+
+        <x-slot:actions>
+            <x-mary-button
+                label="Cancel"
+                @click="$wire.closeVoidModal()"
+                wire:loading.attr="disabled" />
+
+            <x-mary-button
+                label="Void Invoice"
+                class="btn-error"
+                icon="o-x-circle"
+                spinner="voidInvoice"
+                @click="$wire.voidInvoice()"
+                wire:loading.attr="disabled" />
         </x-slot:actions>
     </x-mary-modal>
 </div>
