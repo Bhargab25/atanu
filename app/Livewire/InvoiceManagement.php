@@ -10,6 +10,7 @@ use App\Models\InvoicePayment;
 use App\Models\Client;
 use App\Models\CompanyProfile;
 use App\Models\ProductCategory;
+use App\Models\Product;
 use App\Models\AccountLedger;
 use App\Models\LedgerTransaction;
 use Illuminate\Support\Facades\DB;
@@ -129,12 +130,13 @@ class InvoiceManagement extends Component
                     $service = ProductCategory::find($serviceId);
                     if ($service && isset($serviceData['items'])) {
                         foreach ($serviceData['items'] as $item) {
+                            $latestItem = Product::find($item['item_id']);
                             $this->invoiceItems[] = [
                                 'service_id' => $serviceId,
                                 'service_name' => $service->name,
                                 'item_id' => $item['item_id'],
-                                'item_name' => $item['item_name'],
-                                'description' => $item['description'] ?? '',
+                                'item_name' => $latestItem ? $latestItem->name : ($item['name'] ?? 'Unnamed Item'),
+                                'description' => $latestItem ? $latestItem->description : ($item['description'] ?? ''),
                                 'quantity' => 1,
                                 'unit_price' => 0.00,
                                 'total' => 0.00,
@@ -147,18 +149,34 @@ class InvoiceManagement extends Component
     }
 
     // FIX: Add these watchers for automatic calculation
-    public function updatedInvoiceItems()
+    public function updatedInvoiceItems($value, $name)
     {
+        // $name = "invoiceItems.0.quantity" or "invoiceItems.1.unit_price"
+        $parts = explode('.', $name);
+
+        if (count($parts) >= 3) {
+            $index = $parts[1];
+
+            if (isset($this->invoiceItems[$index])) {
+                $qty   = (float) ($this->invoiceItems[$index]['quantity'] ?? 0);
+                $price = (float) ($this->invoiceItems[$index]['unit_price'] ?? 0);
+
+                $this->invoiceItems[$index]['total'] = $qty * $price;
+            }
+        }
+
         $this->calculateTotals();
     }
 
-    public function updatedTaxAmount()
+    public function updatedTaxAmount($value)
     {
+        $this->taxAmount = (float) $value;
         $this->calculateTotals();
     }
 
-    public function updatedDiscountAmount()
+    public function updatedDiscountAmount($value)
     {
+        $this->discountAmount = (float) $value;
         $this->calculateTotals();
     }
 
@@ -192,8 +210,14 @@ class InvoiceManagement extends Component
 
     private function calculateTotals()
     {
-        $this->subtotal = collect($this->invoiceItems)->sum('total');
-        $this->totalAmount = $this->subtotal + $this->taxAmount - $this->discountAmount;
+        $this->subtotal = collect($this->invoiceItems)->sum(function ($item) {
+            return (float) ($item['total'] ?? 0);
+        });
+
+        $tax      = (float) $this->taxAmount;
+        $discount = (float) $this->discountAmount;
+
+        $this->totalAmount = $this->subtotal + $tax - $discount;
     }
 
     public function openInvoiceModal()
@@ -266,7 +290,7 @@ class InvoiceManagement extends Component
                     $this->success('Invoice updated successfully!');
                 } else {
                     $invoice = Invoice::create($data);
-                    
+
                     // FIXED: Create ledger entries when invoice is created (draft state)
                     // Only create accounting entries when invoice is sent/finalized
                     $this->success('Invoice created successfully! Mark as "Sent" to create accounting entries.');

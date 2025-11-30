@@ -183,7 +183,7 @@ class Invoice extends Model
                 $newNumber = 1;
             }
 
-            $invoiceNumber = "$prefix-$year$month$date-" . str_pad($newNumber, 4, '0', STR_PAD_LEFT);
+            $invoiceNumber = "$prefix-$year$month$date-$companyId-" . str_pad($newNumber, 4, '0', STR_PAD_LEFT);
 
             $attempts = 0;
             while (static::where('company_profile_id', $companyId)

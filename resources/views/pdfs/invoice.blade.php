@@ -23,6 +23,39 @@
             width: 48%;
         }
 
+        .company-header-table {
+            width: 100%;
+            border-collapse: collapse;
+        }
+
+        .company-logo {
+            width: 60px;
+            height: 60px;
+            object-fit: contain;
+            display: block;
+        }
+
+        .company-logo-cell {
+            width: 70px;
+            vertical-align: top;
+            padding-right: 15px;
+        }
+
+        .company-details-cell {
+            vertical-align: top;
+        }
+
+        .company-name {
+            font-size: 20px;
+            font-weight: bold;
+            color: #3B82F6;
+            margin: 0 0 5px 0;
+        }
+
+        .company-details-cell div {
+            margin: 2px 0;
+        }
+
         .invoice-info {
             float: right;
             width: 48%;
@@ -33,13 +66,6 @@
             content: "";
             display: table;
             clear: both;
-        }
-
-        .company-name {
-            font-size: 24px;
-            font-weight: bold;
-            color: #3B82F6;
-            margin-bottom: 5px;
         }
 
         .invoice-title {
@@ -169,31 +195,62 @@
     {{-- Header --}}
     <div class="header clearfix">
         <div class="company-info">
-            <div class="company-name">{{ $invoice->company->name }}</div>
-            @if($invoice->company->legal_name && $invoice->company->legal_name !== $invoice->company->name)
-            <div>{{ $invoice->company->legal_name }}</div>
-            @endif
-            @if($invoice->company->address)
-            <div>{{ $invoice->company->address }}</div>
-            @endif
-            @if($invoice->company->city || $invoice->company->state || $invoice->company->postal_code)
-            <div>
-                {{ $invoice->company->city }}
-                @if($invoice->company->city && $invoice->company->state), @endif
-                {{ $invoice->company->state }}
-                {{ $invoice->company->postal_code }}
-            </div>
-            @endif
-            @if($invoice->company->phone)
-            <div>Phone: {{ $invoice->company->phone }}</div>
-            @endif
-            @if($invoice->company->email)
-            <div>Email: {{ $invoice->company->email }}</div>
-            @endif
-            @if($invoice->company->gstin)
-            <div>GSTIN: {{ $invoice->company->gstin }}</div>
-            @endif
+            <table class="company-header-table">
+                <tr>
+                    {{-- Company Logo --}}
+                    @if($invoice->company->logo_path)
+                    @php
+                    $logoPath = storage_path('app/public/' . $invoice->company->logo_path);
+
+                    if (!file_exists($logoPath)) {
+                    $logoPath = public_path('storage/' . $invoice->company->logo_path);
+                    }
+
+                    // Convert to base64 for better PDF compatibility
+                    if (file_exists($logoPath)) {
+                    $logoData = base64_encode(file_get_contents($logoPath));
+                    $mimeType = mime_content_type($logoPath);
+                    $logoSrc = "data:$mimeType;base64,$logoData";
+                    }
+                    @endphp
+
+                    @if(isset($logoSrc))
+                    <td class="company-logo-cell">
+                        <img src="{{ $logoSrc }}" alt="{{ $invoice->company->name }}" class="company-logo">
+                    </td>
+                    @endif
+                    @endif
+
+                    <td class="company-details-cell">
+                        <div class="company-name">{{ $invoice->company->name }}</div>
+                        @if($invoice->company->legal_name && $invoice->company->legal_name !== $invoice->company->name)
+                        <div>{{ $invoice->company->legal_name }}</div>
+                        @endif
+                        @if($invoice->company->address)
+                        <div>{{ $invoice->company->address }}</div>
+                        @endif
+                        @if($invoice->company->city || $invoice->company->state || $invoice->company->postal_code)
+                        <div>
+                            {{ $invoice->company->city }}
+                            @if($invoice->company->city && $invoice->company->state), @endif
+                            {{ $invoice->company->state }}
+                            {{ $invoice->company->postal_code }}
+                        </div>
+                        @endif
+                        @if($invoice->company->phone)
+                        <div>Phone: {{ $invoice->company->phone }}</div>
+                        @endif
+                        @if($invoice->company->email)
+                        <div>Email: {{ $invoice->company->email }}</div>
+                        @endif
+                        @if($invoice->company->gstin)
+                        <div>GSTIN: {{ $invoice->company->gstin }}</div>
+                        @endif
+                    </td>
+                </tr>
+            </table>
         </div>
+
 
         <div class="invoice-info">
             <div class="invoice-title">INVOICE</div>
@@ -202,11 +259,6 @@
             @if($invoice->due_date)
             <div><strong>Due Date:</strong> {{ $invoice->due_date->format('d/m/Y') }}</div>
             @endif
-            <div style="margin-top: 10px;">
-                <span class="status-badge status-{{ $invoice->payment_status === 'paid' ? 'paid' : ($invoice->payment_status === 'unpaid' ? 'unpaid' : 'partial') }}">
-                    {{ ucfirst(str_replace('_', ' ', $invoice->payment_status)) }}
-                </span>
-            </div>
         </div>
     </div>
 

@@ -117,7 +117,7 @@ class Client extends Model
             ->first();
 
         $nextNumber = $lastClient ? (int) substr($lastClient->client_id, 2) + 1 : 1;
-        return 'CL' . str_pad($nextNumber, 3, '0', STR_PAD_LEFT);
+        return 'CL'. $companyId . str_pad($nextNumber, 3, '0', STR_PAD_LEFT);
     }
 
     // Helper method to get services with items for invoice generation

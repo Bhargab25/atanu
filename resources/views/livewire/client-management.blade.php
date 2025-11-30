@@ -115,6 +115,9 @@
                     {{-- Service Selection --}}
                     <div>
                         <label class="block text-sm font-medium mb-2">Select Services *</label>
+                        @error('selectedServices')
+                        <p class="text-xs text-error mb-2">{{ $message }}</p>
+                        @enderror
                         <div class="grid grid-cols-1 md:grid-cols-2 gap-3">
                             @foreach($availableServices as $service)
                             <label class="flex items-start gap-3 p-3 border rounded-lg cursor-pointer hover:bg-gray-50 transition-colors
@@ -145,7 +148,12 @@
 
                         @if($service)
                         <div class="border border-gray-200 rounded-lg p-4">
+
                             <h5 class="font-medium text-gray-800 mb-3">{{ $service['name'] }} Products</h5>
+
+                            @error("serviceItems.$serviceId.items")
+                            <p class="text-xs text-error mb-2">{{ $message }}</p>
+                            @enderror
 
                             @if(!empty($service['items']))
                             <div class="grid grid-cols-1 md:grid-cols-2 gap-3">
@@ -248,12 +256,12 @@
             selectable>
 
             @scope('cell_owner_company', $row)
-                <div class="text-sm">
-                    <div class="font-medium text-blue-600">{{ $row->company->name ?? 'N/A' }}</div>
-                    @if($row->company && $row->company->legal_name)
-                        <div class="text-xs text-gray-500">{{ $row->company->legal_name }}</div>
-                    @endif
-                </div>
+            <div class="text-sm">
+                <div class="font-medium text-blue-600">{{ $row->company->name ?? 'N/A' }}</div>
+                @if($row->company && $row->company->legal_name)
+                <div class="text-xs text-gray-500">{{ $row->company->legal_name }}</div>
+                @endif
+            </div>
             @endscope
 
             @scope('cell_client_id', $row)
@@ -406,7 +414,7 @@
         class="w-11/12 lg:w-1/3"
         right>
 
-         <div class="space-y-4">
+        <div class="space-y-4">
             {{-- Owner Company Filter (New) --}}
             <div>
                 <label class="block text-sm font-medium mb-2">Owner Company</label>

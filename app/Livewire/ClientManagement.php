@@ -276,7 +276,12 @@ class ClientManagement extends Component
             'selectedServices' => 'required|array|min:1',
         ];
 
-        // Validate service items
+        // Validate service items: at least one product for each selected service
+        foreach ($this->selectedServices as $serviceId) {
+            $rules["serviceItems.{$serviceId}.items"] = 'required|array|min:1';
+        }
+
+        // Validate each item’s quantity and price
         foreach ($this->serviceItems as $serviceId => $serviceData) {
             if (!empty($serviceData['items'])) {
                 foreach ($serviceData['items'] as $index => $item) {
@@ -286,11 +291,17 @@ class ClientManagement extends Component
             }
         }
 
-        $this->validate($rules, [
-            'company_profile_id.required' => 'Please select a company.',
+        $messages = [
             'selectedServices.required' => 'Please select at least one service.',
             'selectedServices.min' => 'Please select at least one service.',
-        ]);
+        ];
+
+        foreach ($this->selectedServices as $serviceId) {
+            $messages["serviceItems.{$serviceId}.items.required"] = 'Please select at least one product for this service.';
+            $messages["serviceItems.{$serviceId}.items.min"] = 'Please select at least one product for this service.';
+        }
+
+        $this->validate($rules, $messages);
 
         $data = [
             'company_profile_id' => $this->company_profile_id,
