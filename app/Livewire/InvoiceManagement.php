@@ -204,6 +204,15 @@ class InvoiceManagement extends Component
         }
     }
 
+    public function updateItemDescription($index, $description)
+    {
+        if (isset($this->invoiceItems[$index])) {
+            $this->invoiceItems[$index]['description'] = $description;
+            // No need to recalculate totals for description changes
+        }
+    }
+
+
     public function removeItem($index)
     {
         if (isset($this->invoiceItems[$index])) {
@@ -432,11 +441,12 @@ class InvoiceManagement extends Component
 
         LedgerTransaction::create([
             'company_profile_id' => $invoice->company_profile_id,
+            'invoice_id' => $invoice->id, // ADD THIS
             'ledger_id' => $clientLedger->id,
             'date' => $invoice->invoice_date,
-            'type' => 'sale', // Use existing enum value
+            'type' => 'sale',
             'description' => "Invoice {$invoice->invoice_number} - {$invoice->client->name}",
-            'debit_amount' => $invoice->total_amount, // Client owes us money
+            'debit_amount' => $invoice->total_amount,
             'credit_amount' => 0,
             'reference' => $invoice->invoice_number,
         ]);
@@ -446,12 +456,13 @@ class InvoiceManagement extends Component
 
         LedgerTransaction::create([
             'company_profile_id' => $invoice->company_profile_id,
+            'invoice_id' => $invoice->id, // ADD THIS
             'ledger_id' => $incomeLedger->id,
             'date' => $invoice->invoice_date,
-            'type' => 'sale', // Use existing enum value
+            'type' => 'sale',
             'description' => "Sale to {$invoice->client->name} - Invoice {$invoice->invoice_number}",
             'debit_amount' => 0,
-            'credit_amount' => $invoice->total_amount, // Income increases
+            'credit_amount' => $invoice->total_amount,
             'reference' => $invoice->invoice_number,
         ]);
 
@@ -518,11 +529,12 @@ class InvoiceManagement extends Component
 
         LedgerTransaction::create([
             'company_profile_id' => $invoice->company_profile_id,
+            'invoice_id' => $invoice->id, // ADD THIS
             'ledger_id' => $paymentLedger->id,
             'date' => $payment->payment_date,
-            'type' => 'receipt', // Use existing enum value
+            'type' => 'receipt',
             'description' => "Payment received from {$invoice->client->name} via {$payment->payment_method}",
-            'debit_amount' => $payment->amount, // Cash/Bank increases
+            'debit_amount' => $payment->amount,
             'credit_amount' => 0,
             'reference' => $payment->payment_reference,
         ]);
@@ -532,17 +544,19 @@ class InvoiceManagement extends Component
 
         LedgerTransaction::create([
             'company_profile_id' => $invoice->company_profile_id,
+            'invoice_id' => $invoice->id, // ADD THIS
             'ledger_id' => $clientLedger->id,
             'date' => $payment->payment_date,
-            'type' => 'receipt', // Use existing enum value
+            'type' => 'receipt',
             'description' => "Payment received for Invoice {$invoice->invoice_number}",
             'debit_amount' => 0,
-            'credit_amount' => $payment->amount, // Client owes us less
+            'credit_amount' => $payment->amount,
             'reference' => $payment->payment_reference,
         ]);
 
         Log::info('Payment ledger entries created', [
             'payment_id' => $payment->id,
+            'invoice_id' => $invoice->id,
             'invoice_number' => $invoice->invoice_number,
             'amount' => $payment->amount
         ]);
@@ -673,12 +687,13 @@ class InvoiceManagement extends Component
     private function reverseInvoiceLedgerEntries(Invoice $invoice)
     {
         // Find original invoice transactions
-        $originalTransactions = LedgerTransaction::where('reference', $invoice->invoice_number)
+        $originalTransactions = LedgerTransaction::where('invoice_id', $invoice->id)
             ->where('company_profile_id', $invoice->company_profile_id)
             ->get();
 
         if ($originalTransactions->isEmpty()) {
             Log::warning('No ledger transactions found for invoice', [
+                'invoice_id' => $invoice->id,
                 'invoice_number' => $invoice->invoice_number
             ]);
             return;
@@ -688,17 +703,19 @@ class InvoiceManagement extends Component
         foreach ($originalTransactions as $transaction) {
             LedgerTransaction::create([
                 'company_profile_id' => $transaction->company_profile_id,
+                'invoice_id' => $invoice->id, // LINK TO SAME INVOICE
                 'ledger_id' => $transaction->ledger_id,
                 'date' => now()->toDateString(),
-                'type' => 'sale', // Keep same type for consistency
+                'type' => 'sale',
                 'description' => "VOID/REVERSAL: " . $transaction->description . " - Cancelled by " . auth()->user()->name,
-                'debit_amount' => $transaction->credit_amount, // Swap debit/credit
-                'credit_amount' => $transaction->debit_amount, // Swap debit/credit
+                'debit_amount' => $transaction->credit_amount, // Swap
+                'credit_amount' => $transaction->debit_amount, // Swap
                 'reference' => $invoice->invoice_number . '-VOID',
             ]);
         }
 
         Log::info('Invoice ledger entries reversed', [
+            'invoice_id' => $invoice->id,
             'invoice_number' => $invoice->invoice_number,
             'transactions_reversed' => $originalTransactions->count(),
             'amount' => $invoice->total_amount
@@ -751,27 +768,42 @@ class InvoiceManagement extends Component
     public function deleteInvoice($invoiceId)
     {
         try {
-            $invoice = Invoice::with(['payments'])->find($invoiceId);
+            $invoice = Invoice::with(['payments', 'ledgerTransactions'])->find($invoiceId);
 
             if (!$invoice) {
                 $this->error('Invoice not found.');
                 return;
             }
 
-            // Only allow deleting draft invoices
+            // STRICT: Only allow deleting draft invoices
             if ($invoice->status !== 'draft') {
                 $this->error(
                     'Cannot delete this invoice.',
-                    'Only draft invoices can be deleted. Please void this invoice instead.'
+                    'Only draft invoices can be deleted. Please void sent/paid invoices instead.'
                 );
                 return;
             }
 
+            // Check for payments
             if ($invoice->payments->count() > 0) {
                 $this->error(
                     'Cannot delete invoice with payments.',
                     'This invoice has payment records. Please void it instead.'
                 );
+                return;
+            }
+
+            // Check for ledger entries (shouldn't exist for draft)
+            if ($invoice->ledgerTransactions->count() > 0) {
+                $this->error(
+                    'Data integrity issue detected.',
+                    'Draft invoice has ledger entries. Please contact support.'
+                );
+                Log::error('Draft invoice has ledger entries', [
+                    'invoice_id' => $invoice->id,
+                    'invoice_number' => $invoice->invoice_number,
+                    'ledger_count' => $invoice->ledgerTransactions->count(),
+                ]);
                 return;
             }
 
@@ -781,7 +813,7 @@ class InvoiceManagement extends Component
                     Storage::disk('public')->delete($invoice->pdf_path);
                 }
 
-                // Delete the invoice
+                // Delete the invoice (cascade will handle related records)
                 $invoice->delete();
 
                 Log::info('Draft invoice deleted', [
@@ -796,7 +828,8 @@ class InvoiceManagement extends Component
         } catch (\Exception $e) {
             Log::error('Error deleting invoice: ' . $e->getMessage(), [
                 'invoice_id' => $invoiceId,
-                'user_id' => auth()->id()
+                'user_id' => auth()->id(),
+                'trace' => $e->getTraceAsString()
             ]);
             $this->error('Error deleting invoice: ' . $e->getMessage());
         }

@@ -9,6 +9,7 @@ use Illuminate\Database\Eloquent\Relations\HasMany;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Storage;
+use Illuminate\Support\Facades\Log;
 
 class Invoice extends Model
 {
@@ -52,6 +53,10 @@ class Invoice extends Model
     public function company(): BelongsTo
     {
         return $this->belongsTo(CompanyProfile::class, 'company_profile_id');
+    }
+    public function ledgerTransactions(): HasMany
+    {
+        return $this->hasMany(LedgerTransaction::class);
     }
 
     public function client(): BelongsTo
@@ -146,7 +151,7 @@ class Invoice extends Model
     }
 
     // Boot method for automatic invoice number generation
-    protected static function boot()
+    protected static function booted()
     {
         parent::boot();
 
@@ -155,10 +160,31 @@ class Invoice extends Model
                 $invoice->invoice_number = static::generateInvoiceNumber($invoice->company_profile_id);
             }
 
-            // Set due date if not provided (default: 30 days)
+            // Set due date if not provided (default 30 days)
             if (empty($invoice->due_date)) {
                 $invoice->due_date = $invoice->invoice_date->addDays(30);
             }
+        });
+
+        // CASCADE DELETE: Remove ledger transactions when invoice is deleted
+        static::deleting(function ($invoice) {
+            // Only draft invoices without ledger entries should be deletable
+            if ($invoice->status !== 'draft') {
+                throw new \Exception('Only draft invoices can be deleted. Please void sent/paid invoices instead.');
+            }
+
+            // Delete associated ledger transactions (should be none for draft)
+            $invoice->ledgerTransactions()->delete();
+
+            // Delete payments (should be none for draft)
+            $invoice->payments()->delete();
+
+            Log::info('Invoice cascade delete triggered', [
+                'invoice_id' => $invoice->id,
+                'invoice_number' => $invoice->invoice_number,
+                'status' => $invoice->status,
+                'ledger_transactions_deleted' => $invoice->ledgerTransactions()->count(),
+            ]);
         });
     }
 
@@ -186,7 +212,8 @@ class Invoice extends Model
             $invoiceNumber = "$prefix-$year$month$date-$companyId-" . str_pad($newNumber, 4, '0', STR_PAD_LEFT);
 
             $attempts = 0;
-            while (static::where('company_profile_id', $companyId)
+            while (
+                static::where('company_profile_id', $companyId)
                 ->where('invoice_number', $invoiceNumber)
                 ->exists() && $attempts < 10
             ) {
@@ -363,5 +390,4 @@ class Invoice extends Model
             ]);
         }
     }
-    
 }

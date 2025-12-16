@@ -12,6 +12,7 @@ class LedgerTransaction extends Model
 
     protected $fillable = [
         'company_profile_id',
+        'invoice_id',
         'ledger_id',
         'date',
         'type',
@@ -31,6 +32,10 @@ class LedgerTransaction extends Model
     public function company(): BelongsTo
     {
         return $this->belongsTo(CompanyProfile::class, 'company_profile_id');
+    }
+    public function invoice(): BelongsTo
+    {
+        return $this->belongsTo(Invoice::class);
     }
 
     public function ledger(): BelongsTo

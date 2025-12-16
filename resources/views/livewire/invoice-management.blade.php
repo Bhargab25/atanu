@@ -361,13 +361,13 @@
                     <table class="table w-full">
                         <thead>
                             <tr>
-                                <th>Service</th>
-                                <th>Item</th>
-                                <th>Description</th>
-                                <th>Qty</th>
-                                <th>Unit Price</th>
-                                <th>Total</th>
-                                <th>Action</th>
+                                <th class="w-32">Service</th>
+                                <th class="w-40">Item</th>
+                                <th class="min-w-[250px]">Description</th>
+                                <th class="w-24">Qty</th>
+                                <th class="w-32">Unit Price</th>
+                                <th class="w-32">Total</th>
+                                <th class="w-20">Action</th>
                             </tr>
                         </thead>
                         <tbody>
@@ -377,7 +377,14 @@
                                     <x-mary-badge :value="$item['service_name']" class="badge-info badge-sm" />
                                 </td>
                                 <td class="text-sm font-medium">{{ $item['item_name'] }}</td>
-                                <td class="text-xs text-gray-600 max-w-xs">{{ $item['description'] }}</td>
+                                <td>
+                                    <x-mary-input
+                                        type="text"
+                                        value="{{ $item['description'] }}"
+                                        wire:input="updateItemDescription({{ $index }}, $event.target.value)"
+                                        class="w-full min-w-[200px]"
+                                        placeholder="Enter description..." />
+                                </td>
                                 <td>
                                     {{-- FIX: Use wire:input for real-time updates --}}
                                     <x-mary-input
